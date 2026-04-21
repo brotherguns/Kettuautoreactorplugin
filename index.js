@@ -7,38 +7,46 @@
     const React = findByProps("createElement", "useState");
     const RN = findByProps("View", "Text", "StyleSheet");
     const { createElement: h, useState, useEffect } = React;
-    const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableOpacity, FlatList, Image } = RN;
+    const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableOpacity, Image } = RN;
     const HTTP = findByProps("put", "del", "patch", "post", "get", "getAPIBaseURL");
     const TokenStore = findByStoreName("AuthenticationStore");
     const FD = findByProps("_interceptors");
     const EmojiStore = findByStoreName("EmojiStore");
     const GuildStore = findByStoreName("GuildStore");
     const SelectedGuildStore = findByStoreName("SelectedGuildStore");
+    const MessageStore = findByStoreName("MessageStore");
+    const SelectedChannelStore = findByStoreName("SelectedChannelStore");
     const tokens = findByProps("unsafe_rawColors", "colors");
     const storage = wrapSync(createStorage(createMMKVBackend("AutoReact")));
     let interceptFn = null;
-    // Emoji stored as reaction strings:
-    //   unicode  → "👍"
-    //   custom   → "name:id"
-    //   animated → "a:name:id"
+    // Strip variation selector \uFE0F that iOS appends to many emoji — Discord rejects them
+    function normalizeEmoji(str) {
+        return str.replace(/\uFE0F/g, "");
+    }
     function emojiToReactionString(e) {
-        if (!e.id) return e.name; // unicode
+        if (!e.id) return normalizeEmoji(e.name);
         return (e.animated ? "a:" : "") + e.name + ":" + e.id;
     }
     function getCustomEmojiId(reactionStr) {
+        const m = reactionStr.match(/:(\d+)$/);
+        return m ? m[1] : null;
+    }
+    function getCustomEmojiName(reactionStr) {
         const parts = reactionStr.split(":");
-        if (parts.length === 2) return parts[1];
-        if (parts.length === 3 && parts[0] === "a") return parts[2];
+        if (parts.length === 2) return parts[0];
+        if (parts.length === 3 && parts[0] === "a") return parts[1];
         return null;
     }
     function getToken() {
         return TokenStore.getToken();
     }
+    // React to a single message with staggered timing to beat Discord rate limit
     function reactToMessage(channelId, msgId, emojis) {
         const token = getToken();
         emojis.forEach(function(emoji, i) {
             setTimeout(function() {
-                const url = "https://discord.com/api/v9/channels/" + channelId + "/messages/" + msgId + "/reactions/" + encodeURIComponent(emoji) + "/@me";
+                const encoded = encodeURIComponent(normalizeEmoji(emoji));
+                const url = "https://discord.com/api/v9/channels/" + channelId + "/messages/" + msgId + "/reactions/" + encoded + "/@me";
                 HTTP.put({
                     url,
                     headers: {
@@ -46,6 +54,25 @@
                     }
                 }).catch(function() {});
             }, i * 350);
+        });
+    }
+    // React to all cached messages from a specific user in a channel (last 50 max)
+    function reactToExisting(userId) {
+        var _storage_users, _cfg_emojis, _msgs_toArray;
+        const cfg = (_storage_users = storage.users) === null || _storage_users === void 0 ? void 0 : _storage_users[userId];
+        if (!(cfg === null || cfg === void 0 ? void 0 : cfg.enabled) || !((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length)) return;
+        const channelId = SelectedChannelStore.getChannelId();
+        if (!channelId) return;
+        const msgs = MessageStore.getMessages(channelId);
+        const arr = (msgs === null || msgs === void 0 ? void 0 : msgs._array) || (msgs === null || msgs === void 0 ? void 0 : (_msgs_toArray = msgs.toArray) === null || _msgs_toArray === void 0 ? void 0 : _msgs_toArray.call(msgs)) || [];
+        const userMsgs = arr.filter((m)=>{
+            var _m_author;
+            return ((_m_author = m.author) === null || _m_author === void 0 ? void 0 : _m_author.id) === userId;
+        }).slice(-20);
+        userMsgs.forEach(function(msg, i) {
+            setTimeout(function() {
+                reactToMessage(channelId, msg.id, cfg.emojis);
+            }, i * cfg.emojis.length * 400);
         });
     }
     const S = StyleSheet.create({
@@ -135,8 +162,8 @@
             fontSize: 15
         },
         emojiPickerItem: {
-            width: 52,
-            height: 52,
+            width: 56,
+            height: 56,
             alignItems: "center",
             justifyContent: "center",
             borderRadius: 8,
@@ -148,7 +175,7 @@
             borderRadius: 4
         },
         emojiPickerTxt: {
-            fontSize: 11,
+            fontSize: 10,
             marginTop: 2,
             textAlign: "center"
         },
@@ -182,10 +209,10 @@
         var _tokens_colors;
         return (tokens === null || tokens === void 0 ? void 0 : (_tokens_colors = tokens.colors) === null || _tokens_colors === void 0 ? void 0 : _tokens_colors[key]) || fallback;
     }
-    function CustomEmojiChip({ reactionStr, onRemove }) {
+    function EmojiChip({ reactionStr, onRemove }) {
         const id = getCustomEmojiId(reactionStr);
-        const name = reactionStr.split(":").filter((p)=>p !== "a").find((p)=>isNaN(Number(p)));
-        const url = id ? `https://cdn.discordapp.com/emojis/${id}.webp?size=32` : null;
+        const name = getCustomEmojiName(reactionStr);
+        const imgUrl = id ? "https://cdn.discordapp.com/emojis/" + id + ".webp?size=32" : null;
         return h(View, {
             style: [
                 S.chip,
@@ -193,9 +220,9 @@
                     backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
                 }
             ]
-        }, url ? h(Image, {
+        }, imgUrl ? h(Image, {
             source: {
-                uri: url
+                uri: imgUrl
             },
             style: {
                 width: 20,
@@ -203,12 +230,16 @@
                 borderRadius: 3,
                 marginRight: 4
             }
-        }) : null, h(Text, {
+        }) : h(Text, {
             style: {
-                fontSize: name ? 12 : 18,
-                color: c("TEXT_NORMAL", "#fff")
+                fontSize: 18
             }
-        }, name ? ":" + name + ":" : reactionStr), onRemove ? h(TouchableOpacity, {
+        }, reactionStr), name ? h(Text, {
+            style: {
+                fontSize: 11,
+                color: c("TEXT_MUTED", "#aaa")
+            }
+        }, ":" + name + ":") : null, onRemove ? h(TouchableOpacity, {
             onPress: onRemove,
             style: {
                 marginLeft: 4
@@ -218,11 +249,12 @@
                 fontSize: 12,
                 color: c("TEXT_MUTED", "#aaa")
             }
-        }, "✕")) : null);
+        }, "\u2715")) : null);
     }
-    function UserCard({ userId, onToggle, onDelete, onEdit }) {
+    function UserCard({ userId, onToggle, onDelete, onEdit, onReactExisting }) {
         var _cfg_emojis;
         const cfg = storage.users[userId];
+        const brand = c("BRAND_NEW", "#5865f2");
         return h(View, {
             style: [
                 S.card,
@@ -254,7 +286,7 @@
             value: cfg.enabled,
             onValueChange: (v)=>onToggle(userId, v),
             trackColor: {
-                true: c("BRAND_NEW", "#5865f2")
+                true: brand
             }
         }), h(TouchableOpacity, {
             style: [
@@ -271,9 +303,9 @@
                     color: "#fff"
                 }
             ]
-        }, "✕"))), h(View, {
+        }, "\u2715"))), h(View, {
             style: S.emojiRow
-        }, ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0 ? cfg.emojis.map((e, i)=>h(CustomEmojiChip, {
+        }, ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0 ? cfg.emojis.map((e, i)=>h(EmojiChip, {
                 key: i,
                 reactionStr: e
             })) : h(Text, {
@@ -283,13 +315,18 @@
                     color: c("TEXT_MUTED", "#aaa")
                 }
             ]
-        }, "No emojis — tap Edit")), h(TouchableOpacity, {
+        }, "No emojis \u2014 tap Edit")), h(View, {
+            style: [
+                S.row,
+                {
+                    marginTop: 8
+                }
+            ]
+        }, h(TouchableOpacity, {
             style: [
                 S.smBtn,
                 {
-                    backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"),
-                    marginTop: 6,
-                    alignSelf: "flex-start"
+                    backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
                 }
             ],
             onPress: ()=>onEdit(userId)
@@ -300,7 +337,22 @@
                     color: c("TEXT_NORMAL", "#fff")
                 }
             ]
-        }, "Edit Emojis")));
+        }, "Edit Emojis")), h(TouchableOpacity, {
+            style: [
+                S.smBtn,
+                {
+                    backgroundColor: brand
+                }
+            ],
+            onPress: ()=>onReactExisting(userId)
+        }, h(Text, {
+            style: [
+                S.smTxt,
+                {
+                    color: "#fff"
+                }
+            ]
+        }, "\u26a1 React Existing"))));
     }
     function EmojiEditor({ userId, onDone }) {
         const cfg = storage.users[userId];
@@ -333,23 +385,32 @@
             storage.users[userId].emojis = next;
         }
         function addUnicode() {
-            const list = unicodeInput.trim().split(/[\s,]+/).filter(Boolean);
+            // Split on whitespace/commas, normalize each to strip \uFE0F
+            const raw = unicodeInput.trim();
+            // Split by spaces/commas but keep multi-codepoint emoji intact
+            const list = [];
+            // Simple greedy split by whitespace/comma
+            raw.split(/[\s,]+/).forEach(function(part) {
+                const normalized = normalizeEmoji(part.trim());
+                if (normalized) list.push(normalized);
+            });
             let next = [
                 ...emojis
             ];
-            for (const e of list){
+            list.forEach(function(e) {
                 if (!next.includes(e)) next.push(e);
-            }
+            });
             setEmojis(next);
             storage.users[userId].emojis = next;
             setUnicodeInput("");
         }
-        const bg = {
+        const brand = c("BRAND_NEW", "#5865f2");
+        const bgPri = {
             backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
         };
-        ({
+        const bgSec = {
             backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31")
-        });
+        };
         ({
             backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
         });
@@ -359,19 +420,25 @@
         const textMuted = {
             color: c("TEXT_MUTED", "#aaa")
         };
-        const brand = c("BRAND_NEW", "#5865f2");
+        const inputStyle = [
+            S.input,
+            textNorm,
+            bgSec,
+            {
+                borderColor: c("BACKGROUND_TERTIARY", "#1e1f22")
+            }
+        ];
         return h(ScrollView, {
             style: [
                 S.container,
-                bg
+                bgPri
             ]
         }, h(Text, {
             style: [
                 S.sectionTitle,
                 textNorm
             ]
-        }, "Editing: " + ((cfg === null || cfg === void 0 ? void 0 : cfg.label) || userId)), // Current emojis
-        h(Text, {
+        }, "Emojis for " + ((cfg === null || cfg === void 0 ? void 0 : cfg.label) || userId)), h(Text, {
             style: [
                 S.hint,
                 textMuted,
@@ -379,19 +446,18 @@
                     marginTop: 8
                 }
             ]
-        }, "Current reactions (tap to remove):"), h(View, {
+        }, "Tap an emoji to remove it:"), h(View, {
             style: S.emojiRow
         }, emojis.length === 0 ? h(Text, {
             style: [
                 S.hint,
                 textMuted
             ]
-        }, "None added yet") : emojis.map((e, i)=>h(CustomEmojiChip, {
+        }, "None added yet") : emojis.map((e, i)=>h(EmojiChip, {
                 key: i,
                 reactionStr: e,
                 onRemove: ()=>removeEmoji(e)
-            }))), // Tabs
-        h(View, {
+            }))), h(View, {
             style: [
                 S.tabRow,
                 {
@@ -410,7 +476,7 @@
             style: [
                 S.tabTxt,
                 {
-                    color: tab === "server" ? "#fff" : c("TEXT_NORMAL", "#fff")
+                    color: "#fff"
                 }
             ]
         }, "Server Emojis")), h(TouchableOpacity, {
@@ -425,17 +491,15 @@
             style: [
                 S.tabTxt,
                 {
-                    color: tab === "unicode" ? "#fff" : c("TEXT_NORMAL", "#fff")
+                    color: "#fff"
                 }
             ]
-        }, "Unicode / Text"))), // Server emoji tab
-        tab === "server" ? h(View, null, // Guild picker
-        h(Text, {
+        }, "Unicode"))), tab === "server" ? h(View, null, h(Text, {
             style: [
                 S.hint,
                 textMuted
             ]
-        }, "Select server:"), h(ScrollView, {
+        }, "Pick a server:"), h(ScrollView, {
             horizontal: true,
             showsHorizontalScrollIndicator: false
         }, h(View, {
@@ -443,7 +507,7 @@
                 flexDirection: "row",
                 paddingBottom: 8
             }
-        }, guilds.slice(0, 30).map((g)=>h(TouchableOpacity, {
+        }, guilds.slice(0, 40).map((g)=>h(TouchableOpacity, {
                 key: g.id,
                 style: [
                     S.guildBtn,
@@ -459,8 +523,7 @@
                         color: g.id === guildId ? "#fff" : c("TEXT_NORMAL", "#fff")
                     }
                 ]
-            }, g.name.slice(0, 16)))))), // Emoji grid
-        serverEmojis.length === 0 ? h(Text, {
+            }, g.name.slice(0, 18)))))), serverEmojis.length === 0 ? h(Text, {
             style: [
                 S.empty,
                 textMuted
@@ -484,7 +547,7 @@
                 onPress: ()=>selected ? removeEmoji(rs) : addEmoji(rs)
             }, h(Image, {
                 source: {
-                    uri: `https://cdn.discordapp.com/emojis/${e.id}.webp?size=64`
+                    uri: "https://cdn.discordapp.com/emojis/" + e.id + ".webp?size=64"
                 },
                 style: S.emojiPickerImg
             }), h(Text, {
@@ -494,24 +557,16 @@
                 ],
                 numberOfLines: 1
             }, e.name.slice(0, 8)));
-        }))) : null, // Unicode tab
-        tab === "unicode" ? h(View, null, h(Text, {
+        }))) : null, tab === "unicode" ? h(View, null, h(Text, {
             style: [
                 S.hint,
                 textMuted
             ]
-        }, "Paste emojis separated by spaces or commas:"), h(TextInput, {
-            style: [
-                S.input,
-                {
-                    color: c("TEXT_NORMAL", "#fff"),
-                    backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31"),
-                    borderColor: c("BACKGROUND_TERTIARY", "#1e1f22")
-                }
-            ],
+        }, "Paste emoji separated by spaces. iOS variation selectors are stripped automatically."), h(TextInput, {
+            style: inputStyle,
             value: unicodeInput,
             onChangeText: setUnicodeInput,
-            placeholder: "👍 🔥 ❤️",
+            placeholder: "\uD83D\uDC4D \uD83D\uDD25 \uD83D\uDE2D",
             placeholderTextColor: c("TEXT_MUTED", "#aaa"),
             multiline: true
         }), h(TouchableOpacity, {
@@ -532,8 +587,8 @@
         }, "Add"))) : null, h(TouchableOpacity, {
             style: [
                 S.btn,
+                bgSec,
                 {
-                    backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31"),
                     marginTop: 24
                 }
             ],
@@ -543,7 +598,7 @@
                 S.btnTxt,
                 textNorm
             ]
-        }, "← Back")));
+        }, "\u2190 Back")));
     }
     function Settings() {
         var _storage_users;
@@ -585,7 +640,7 @@
         }
         function handleDelete(uid) {
             var _storage_users_uid;
-            Alert.alert("Remove User", `Remove ${((_storage_users_uid = storage.users[uid]) === null || _storage_users_uid === void 0 ? void 0 : _storage_users_uid.label) || uid}?`, [
+            Alert.alert("Remove User", "Remove " + (((_storage_users_uid = storage.users[uid]) === null || _storage_users_uid === void 0 ? void 0 : _storage_users_uid.label) || uid) + "?", [
                 {
                     text: "Cancel",
                     style: "cancel"
@@ -599,6 +654,15 @@
                     }
                 }
             ]);
+        }
+        function handleReactExisting(uid) {
+            const cfg = storage.users[uid];
+            if (!(cfg === null || cfg === void 0 ? void 0 : cfg.enabled)) {
+                Alert.alert("User Disabled", "Enable this user first.");
+                return;
+            }
+            reactToExisting(uid);
+            Alert.alert("Done", "Reacting to recent messages from " + (cfg.label || uid) + " in current channel.");
         }
         return h(ScrollView, {
             style: [
@@ -634,7 +698,7 @@
                     color: c("TEXT_MUTED", "#aaa")
                 }
             ]
-        }, "User ID"), h(TextInput, {
+        }, "User ID (tap avatar \u2192 Copy ID)"), h(TextInput, {
             style: inputStyle,
             value: newId,
             onChangeText: setNewId,
@@ -664,7 +728,7 @@
                     marginTop: 24
                 }
             ]
-        }, `Watched Users (${userKeys.length})`), userKeys.length === 0 ? h(Text, {
+        }, "Watched Users (" + userKeys.length + ")"), userKeys.length === 0 ? h(Text, {
             style: [
                 S.empty,
                 {
@@ -679,7 +743,8 @@
                     refresh();
                 },
                 onDelete: handleDelete,
-                onEdit: setEditTarget
+                onEdit: setEditTarget,
+                onReactExisting: handleReactExisting
             })));
     }
     var index = {
