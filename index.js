@@ -3,7 +3,7 @@
 
     const vd = window.vendetta;
     const { findByProps, findByStoreName } = vd.metro;
-    const { createStorage, wrapSync } = vd.storage;
+    const { createStorage, wrapSync, createMMKVBackend } = vd.storage;
     const React = findByProps("createElement", "useState");
     const RN = findByProps("View", "Text", "StyleSheet");
     const { createElement: h, useState, useEffect } = React;
@@ -15,7 +15,7 @@
     const GuildStore = findByStoreName("GuildStore");
     const SelectedGuildStore = findByStoreName("SelectedGuildStore");
     const tokens = findByProps("unsafe_rawColors", "colors");
-    const storage = wrapSync(createStorage("AutoReact"));
+    const storage = wrapSync(createStorage(createMMKVBackend("AutoReact")));
     let interceptFn = null;
     // Emoji stored as reaction strings:
     //   unicode  → "👍"
@@ -36,15 +36,17 @@
     }
     function reactToMessage(channelId, msgId, emojis) {
         const token = getToken();
-        for (const emoji of emojis){
-            const url = `https://discord.com/api/v9/channels/${channelId}/messages/${msgId}/reactions/${encodeURIComponent(emoji)}/@me`;
-            HTTP.put({
-                url,
-                headers: {
-                    Authorization: token
-                }
-            }).catch(()=>{});
-        }
+        emojis.forEach(function(emoji, i) {
+            setTimeout(function() {
+                const url = "https://discord.com/api/v9/channels/" + channelId + "/messages/" + msgId + "/reactions/" + encodeURIComponent(emoji) + "/@me";
+                HTTP.put({
+                    url,
+                    headers: {
+                        Authorization: token
+                    }
+                }).catch(function() {});
+            }, i * 350);
+        });
     }
     const S = StyleSheet.create({
         container: {
