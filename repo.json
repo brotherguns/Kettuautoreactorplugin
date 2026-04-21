@@ -1,0 +1,9 @@
+{
+  "$meta": {
+    "name": "ntroherb plugins",
+    "description": "Personal plugin repo"
+  },
+  "autoreact": {
+    "version": "1.0.0"
+  }
+}
