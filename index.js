@@ -3,23 +3,19 @@
 
     const vd = window.vendetta;
     const { findByProps, findByStoreName } = vd.metro;
-    const { React, ReactNative: RN } = vd.ui.assets ? vd : {
-        React: findByProps("createElement", "useState"),
-        ReactNative: findByProps("View", "Text", "StyleSheet")
-    };
+    const { createStorage, wrapSync } = vd.storage;
+    const React = findByProps("createElement", "useState");
+    const RN = findByProps("View", "Text", "StyleSheet");
     const { createElement: h, useState } = React;
     const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableOpacity } = RN;
     const HTTP = findByProps("put", "del", "patch", "post", "get", "getAPIBaseURL");
-    const TokenStore = findByStoreName("UserAuthTokenStore") || findByStoreName("AuthenticationStore");
+    const TokenStore = findByStoreName("AuthenticationStore");
     const FD = findByProps("_interceptors");
     const tokens = findByProps("unsafe_rawColors", "colors");
-    // storage.users: { [userId]: { label: string, emojis: string[], enabled: boolean } }
-    const storage = vd.plugin.storage;
-    if (!storage.users) storage.users = {};
+    const storage = wrapSync(createStorage("AutoReact"));
     let interceptFn = null;
     function getToken() {
-        const ts = TokenStore;
-        return ts.getToken ? ts.getToken() : ts.token;
+        return TokenStore.getToken();
     }
     function reactToMessage(channelId, msgId, emojis) {
         const token = getToken();
@@ -213,6 +209,7 @@
         }, "Edit Emojis")));
     }
     function Settings() {
+        var _storage_users;
         const [tick, setTick] = useState(0);
         const refresh = ()=>setTick((n)=>n + 1);
         const [newId, setNewId] = useState("");
@@ -232,6 +229,7 @@
             const uid = newId.trim();
             if (!uid) return;
             const emojiList = newEmojis.trim().split(/[\s,]+/).filter(Boolean);
+            if (!storage.users) storage.users = {};
             storage.users[uid] = {
                 label: newLabel.trim() || uid,
                 emojis: emojiList,
@@ -270,7 +268,7 @@
             setEditTarget(null);
             refresh();
         }
-        if (editTarget && storage.users[editTarget]) {
+        if (editTarget && ((_storage_users = storage.users) === null || _storage_users === void 0 ? void 0 : _storage_users[editTarget])) {
             return h(ScrollView, {
                 style: [
                     S.container,
@@ -332,7 +330,7 @@
                 ]
             }, "Cancel")));
         }
-        const userKeys = Object.keys(storage.users);
+        const userKeys = Object.keys(storage.users || {});
         return h(ScrollView, {
             style: [
                 S.container,
@@ -381,7 +379,7 @@
                     color: c("TEXT_MUTED", "#aaa")
                 }
             ]
-        }, "Emojis"), h(TextInput, {
+        }, "Emojis (space or comma separated)"), h(TextInput, {
             style: inputStyle,
             value: newEmojis,
             onChangeText: setNewEmojis,
@@ -430,12 +428,13 @@
     }
     var index = {
         onLoad () {
+            if (!storage.users) storage.users = {};
             interceptFn = (payload)=>{
-                var _payload_message_author, _payload_message, _cfg_emojis;
+                var _payload_message_author, _payload_message, _storage_users, _cfg_emojis;
                 if (payload.type !== "MESSAGE_CREATE" || payload.optimistic) return null;
                 const authorId = (_payload_message = payload.message) === null || _payload_message === void 0 ? void 0 : (_payload_message_author = _payload_message.author) === null || _payload_message_author === void 0 ? void 0 : _payload_message_author.id;
                 if (!authorId) return null;
-                const cfg = storage.users[authorId];
+                const cfg = (_storage_users = storage.users) === null || _storage_users === void 0 ? void 0 : _storage_users[authorId];
                 if ((cfg === null || cfg === void 0 ? void 0 : cfg.enabled) && ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0) {
                     reactToMessage(payload.channelId, payload.message.id, cfg.emojis);
                 }
