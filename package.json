@@ -1,0 +1,10 @@
+{
+    "name": "noagegate",
+    "version": "1.0.0",
+    "scripts": { "build": "rollup -c" },
+    "devDependencies": {
+        "@rollup/plugin-node-resolve": "^15.0.0",
+        "rollup": "^3.0.0",
+        "rollup-plugin-swc3": "^0.11.0"
+    }
+}
