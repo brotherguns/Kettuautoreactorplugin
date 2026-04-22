@@ -507,7 +507,7 @@
                 flexDirection: "row",
                 paddingBottom: 8
             }
-        }, guilds.slice(0, 40).map((g)=>h(TouchableOpacity, {
+        }, guilds.slice(0, 100).map((g)=>h(TouchableOpacity, {
                 key: g.id,
                 style: [
                     S.guildBtn,
