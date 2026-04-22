@@ -220,40 +220,43 @@
         return h(View, {
             style: [S.card, { backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31") }]
         },
-            // Header row — nowrap so switch and × never fall off screen
-            h(View, { style: { flexDirection: "row", alignItems: "center", flexWrap: "nowrap" } },
-                h(View, { style: { flex: 1, marginRight: 8, minWidth: 0 } },
+            // Header: label shrinks, controls are in a fixed-width box so nothing escapes
+            h(View, { style: { flexDirection: "row", alignItems: "center" } },
+                h(View, { style: { flex: 1, minWidth: 0, marginRight: 6 } },
                     h(Text, {
                         style: [S.label, { color: c("TEXT_NORMAL", "#fff") }],
-                        numberOfLines: 1,
-                        ellipsizeMode: "tail"
+                        numberOfLines: 1, ellipsizeMode: "tail"
                     }, cfg.label || userId),
                     h(Text, {
                         style: [S.uid, { color: c("TEXT_MUTED", "#aaa") }],
-                        numberOfLines: 1,
-                        ellipsizeMode: "middle"
+                        numberOfLines: 1, ellipsizeMode: "middle"
                     }, userId)
                 ),
-                h(Switch, {
-                    value: cfg.enabled,
-                    onValueChange: (v) => onToggle(userId, v),
-                    trackColor: { true: brand },
-                    style: { flexShrink: 0 }
-                }),
-                h(TouchableOpacity, {
-                    style: [S.smBtn, { backgroundColor: danger, flexShrink: 0, marginLeft: 8 }],
-                    onPress: () => onDelete(userId)
-                }, h(Text, { style: [S.smTxt, { color: "#fff" }] }, "\u2715"))
+                // Fixed-width container: Switch (~51px) + gap + delete button (~32px) = 91px
+                h(View, { style: { width: 91, flexDirection: "row", alignItems: "center", justifyContent: "flex-end" } },
+                    h(Switch, {
+                        value: cfg.enabled,
+                        onValueChange: (v) => onToggle(userId, v),
+                        trackColor: { true: brand }
+                    }),
+                    h(TouchableOpacity, {
+                        style: { backgroundColor: danger, borderRadius: 6, paddingHorizontal: 7, paddingVertical: 4, marginLeft: 6 },
+                        onPress: () => onDelete(userId)
+                    }, h(Text, { style: { fontSize: 12, fontWeight: "700", color: "#fff" } }, "\u2715"))
+                )
             ),
-            // Super react toggle row — fixed layout, switch pinned right
-            h(View, { style: { flexDirection: "row", alignItems: "center", flexWrap: "nowrap", marginTop: 8, marginBottom: 2 } },
-                h(Text, { style: { fontSize: 12, color: gold, fontWeight: "700", flex: 1 } }, "\u26A1 Super React (Nitro)"),
-                h(Switch, {
-                    value: !!cfg.superReact,
-                    onValueChange: (v) => onSuperToggle(userId, v),
-                    trackColor: { true: gold },
-                    style: { flexShrink: 0 }
-                })
+            // Super react row: text shrinks, switch in fixed-width box
+            h(View, { style: { flexDirection: "row", alignItems: "center", marginTop: 8, marginBottom: 2 } },
+                h(Text, { style: { fontSize: 12, color: gold, fontWeight: "700", flex: 1, minWidth: 0 }, numberOfLines: 1 },
+                    "\u26A1 Super React (Nitro)"
+                ),
+                h(View, { style: { width: 51 } },
+                    h(Switch, {
+                        value: !!cfg.superReact,
+                        onValueChange: (v) => onSuperToggle(userId, v),
+                        trackColor: { true: gold }
+                    })
+                )
             ),
             // Emoji chips
             h(View, { style: S.emojiRow },
@@ -261,14 +264,14 @@
                     ? cfg.emojis.map((e, i) => h(EmojiChip, { key: i, reactionStr: e }))
                     : h(Text, { style: [S.hint, { color: c("TEXT_MUTED", "#aaa") }] }, "No emojis \u2014 tap Edit Emojis")
             ),
-            // Action buttons — equal width, stay inside card
+            // Action buttons
             h(View, { style: { flexDirection: "row", alignItems: "center", marginTop: 10 } },
                 h(TouchableOpacity, {
-                    style: [S.smBtn, { backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"), flex: 1, alignItems: "center", marginLeft: 0 }],
+                    style: { flex: 1, backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"), borderRadius: 8, paddingVertical: 7, alignItems: "center" },
                     onPress: () => onEdit(userId)
                 }, h(Text, { style: [S.smTxt, { color: c("TEXT_NORMAL", "#fff") }] }, "\u270F\uFE0F  Edit Emojis")),
                 h(TouchableOpacity, {
-                    style: [S.smBtn, { backgroundColor: brand, flex: 1, alignItems: "center", marginLeft: 8 }],
+                    style: { flex: 1, backgroundColor: brand, borderRadius: 8, paddingVertical: 7, alignItems: "center", marginLeft: 8 },
                     onPress: () => onReactExisting(userId)
                 }, h(Text, { style: [S.smTxt, { color: "#fff" }] }, "\u26A1 React Existing"))
             )
