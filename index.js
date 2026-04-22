@@ -432,7 +432,8 @@
             style: [
                 S.container,
                 bgPri
-            ]
+            ],
+            contentContainerStyle: { paddingBottom: 80 }
         }, h(Text, {
             style: [
                 S.sectionTitle,
@@ -670,7 +671,8 @@
                 {
                     backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
                 }
-            ]
+            ],
+            contentContainerStyle: { paddingBottom: 80 }
         }, h(Text, {
             style: [
                 S.sectionTitle,
