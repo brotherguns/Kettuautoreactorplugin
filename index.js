@@ -45,12 +45,14 @@
         return "https://cdn.discordapp.com/icons/" + guild.id + "/" + guild.icon + ".webp?size=32";
     }
 
-    function reactToMessage(channelId, msgId, emojis) {
+    // superReact=true sends burst/super reactions (requires Nitro)
+    function reactToMessage(channelId, msgId, emojis, superReact) {
         const token = getToken();
+        const typeSuffix = superReact ? "?type=1" : "";
         emojis.forEach(function(emoji, i) {
             setTimeout(function() {
                 const encoded = encodeURIComponent(normalizeEmoji(emoji));
-                const url = "https://discord.com/api/v9/channels/" + channelId + "/messages/" + msgId + "/reactions/" + encoded + "/@me";
+                const url = "https://discord.com/api/v9/channels/" + channelId + "/messages/" + msgId + "/reactions/" + encoded + "/@me" + typeSuffix;
                 HTTP.put({ url, headers: { Authorization: token } }).catch(function() {});
             }, i * 350);
         });
@@ -70,7 +72,7 @@
         }).slice(-20);
         userMsgs.forEach(function(msg, i) {
             setTimeout(function() {
-                reactToMessage(channelId, msg.id, cfg.emojis);
+                reactToMessage(channelId, msg.id, cfg.emojis, cfg.superReact);
             }, i * cfg.emojis.length * 400);
         });
     }
@@ -209,11 +211,12 @@
         );
     }
 
-    function UserCard({ userId, onToggle, onDelete, onEdit, onReactExisting }) {
+    function UserCard({ userId, onToggle, onSuperToggle, onDelete, onEdit, onReactExisting }) {
         var _cfg_emojis;
         const cfg = storage.users[userId];
         const brand = c("BRAND_NEW", "#5865f2");
         const danger = c("STATUS_DANGER", "#ed4245");
+        const gold = "#faa61a";
         return h(View, {
             style: [S.card, { backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31") }]
         },
@@ -232,6 +235,15 @@
                     style: [S.smBtn, { backgroundColor: danger }],
                     onPress: () => onDelete(userId)
                 }, h(Text, { style: [S.smTxt, { color: "#fff" }] }, "\u2715"))
+            ),
+            // Super react toggle row
+            h(View, { style: [S.row, { marginTop: 6, marginBottom: 2 }] },
+                h(Text, { style: { fontSize: 12, color: gold, fontWeight: "700", flex: 1 } }, "\u26A1 Super React (Nitro)"),
+                h(Switch, {
+                    value: !!cfg.superReact,
+                    onValueChange: (v) => onSuperToggle(userId, v),
+                    trackColor: { true: gold }
+                })
             ),
             // Emoji chips
             h(View, { style: S.emojiRow },
@@ -492,7 +504,7 @@
             const uid = newId.trim();
             if (!uid) return;
             if (!storage.users) storage.users = {};
-            storage.users[uid] = { label: newLabel.trim() || uid, emojis: [], enabled: true };
+            storage.users[uid] = { label: newLabel.trim() || uid, emojis: [], enabled: true, superReact: false };
             setNewId("");
             setNewLabel("");
             setEditTarget(uid);
@@ -551,6 +563,7 @@
                     key: uid + tick,
                     userId: uid,
                     onToggle: (u, v) => { storage.users[u].enabled = v; refresh(); },
+                    onSuperToggle: (u, v) => { storage.users[u].superReact = v; refresh(); },
                     onDelete: handleDelete,
                     onEdit: setEditTarget,
                     onReactExisting: handleReactExisting
@@ -587,25 +600,62 @@
     }
 
     // Remove our reaction from a single message for each emoji with staggered timing
-    function unreactFromMessage(channelId, msgId, emojis) {
+    function unreactFromMessage(channelId, msgId, emojis, superReact) {
         const token = getToken();
+        const typeSuffix = superReact ? "?type=1" : "";
         emojis.forEach(function(emoji, i) {
             setTimeout(function() {
                 const encoded = encodeURIComponent(normalizeEmoji(emoji));
-                const url = "https://discord.com/api/v9/channels/" + channelId + "/messages/" + msgId + "/reactions/" + encoded + "/@me";
+                const url = "https://discord.com/api/v9/channels/" + channelId + "/messages/" + msgId + "/reactions/" + encoded + "/@me" + typeSuffix;
                 HTTP.del({ url, headers: { Authorization: token } }).catch(function() {});
             }, i * 350);
         });
     }
 
+    // Resolve a space/comma-separated emoji arg: supports reaction strings, unicode, or emoji names
+    // e.g. "blue_thumbs_up" will search EmojiStore and resolve to "a:blue_thumbs_up:123456"
+    function resolveEmojiArg(emojiArg) {
+        const parts = emojiArg.trim().split(/[\s,]+/).filter(Boolean);
+        const guilds = GuildStore.getGuilds ? Object.values(GuildStore.getGuilds()) : [];
+        const resolved = [];
+        for (const part of parts) {
+            const norm = normalizeEmoji(part.trim());
+            if (!norm) continue;
+            // Already a reaction string (contains colon with digits = custom emoji)
+            if (/:[0-9]+$/.test(norm) || /^a:/.test(norm)) {
+                resolved.push(norm);
+                continue;
+            }
+            // Try to find by exact name in EmojiStore first, then partial
+            let found = null;
+            for (const guild of guilds) {
+                const gEmojis = EmojiStore.getGuildEmoji(guild.id) || [];
+                const exact = gEmojis.find((e) => e.name.toLowerCase() === norm.toLowerCase());
+                if (exact) { found = exact; break; }
+            }
+            if (!found) {
+                for (const guild of guilds) {
+                    const gEmojis = EmojiStore.getGuildEmoji(guild.id) || [];
+                    const partial = gEmojis.find((e) => e.name.toLowerCase().includes(norm.toLowerCase()));
+                    if (partial) { found = partial; break; }
+                }
+            }
+            resolved.push(found ? emojiToReactionString(found) : norm);
+        }
+        return resolved;
+    }
+
     // Shared logic for both commands: resolve emojis then run doAction on fetched messages
     function runBulkCommand(args, ctx, actionLabel, doAction) {
-        const userIdArg = (args.find((a) => a.name === "userid") || {}).value || "";
-        const countArg  = (args.find((a) => a.name === "count")  || {}).value;
-        const emojiArg  = (args.find((a) => a.name === "emojis") || {}).value || "";
-        const userId    = userIdArg.trim().replace(/[^0-9]/g, ""); // strip any <@ > wrapping
-        const count     = Math.min(Math.max(parseInt(countArg) || 10, 1), 200);
-        const channelId = ctx.channel.id;
+        const userIdRaw  = (args.find((a) => a.name === "userid") || {}).value || "";
+        const countArg   = (args.find((a) => a.name === "count")  || {}).value;
+        const emojiArg   = (args.find((a) => a.name === "emojis") || {}).value || "";
+        const superArg   = (args.find((a) => a.name === "superreact") || {}).value;
+        // type 6 gives raw ID; type 3 fallback strips mention wrapping
+        const userId     = String(userIdRaw).trim().replace(/[^0-9]/g, "");
+        const count      = Math.min(Math.max(parseInt(countArg) || 10, 1), 200);
+        const channelId  = ctx.channel.id;
+        const superReact = superArg === true || superArg === "true";
 
         if (!userId) {
             Alert.alert("Missing User", "Please provide a valid User ID.");
@@ -614,6 +664,8 @@
 
         const cfg = (storage.users || {})[userId];
         const configuredEmojis = (cfg && cfg.emojis && cfg.emojis.length) ? cfg.emojis : null;
+        // Per-user super react setting can be overridden by the command arg
+        const effectiveSuper = superArg !== undefined ? superReact : !!(cfg && cfg.superReact);
 
         function execute(emojis) {
             if (!emojis || !emojis.length) {
@@ -626,22 +678,22 @@
                     return;
                 }
                 msgs.forEach(function(msg, i) {
-                    setTimeout(function() { doAction(channelId, msg.id, emojis); }, i * emojis.length * 400);
+                    setTimeout(function() { doAction(channelId, msg.id, emojis, effectiveSuper); }, i * emojis.length * 400);
                 });
+                const superLabel = effectiveSuper ? " (⚡ Super)" : "";
                 Alert.alert(
                     actionLabel + " Done",
                     actionLabel + " on " + msgs.length + " message" + (msgs.length !== 1 ? "s" : "") +
-                    " using " + emojis.length + " emoji" + (emojis.length !== 1 ? "s" : "") + "."
+                    " using " + emojis.length + " emoji" + (emojis.length !== 1 ? "s" : "") + superLabel + "."
                 );
             }).catch(function() {
                 Alert.alert("Error", "Failed to fetch messages. Check your connection and try again.");
             });
         }
 
-        // If emojis were typed into the command, use those directly
+        // If emojis were typed, resolve names → reaction strings then execute
         if (emojiArg.trim()) {
-            const parsed = emojiArg.trim().split(/[\s,]+/).map((e) => normalizeEmoji(e.trim())).filter(Boolean);
-            execute(parsed);
+            execute(resolveEmojiArg(emojiArg));
             return;
         }
 
@@ -649,7 +701,7 @@
         if (configuredEmojis) {
             Alert.alert(
                 "Which Emojis?",
-                userId + " has " + configuredEmojis.length + " configured emoji" + (configuredEmojis.length !== 1 ? "s" : "") + ". Use those, or re-run the command with the emojis: option for custom ones.",
+                "User has " + configuredEmojis.length + " configured emoji" + (configuredEmojis.length !== 1 ? "s" : "") + ". Use those, or re-run with the emojis: option for custom ones.",
                 [
                     { text: "Use Configured", onPress: () => execute(configuredEmojis) },
                     { text: "Cancel", style: "cancel" }
@@ -661,13 +713,13 @@
         Alert.alert("No Emojis", "No emojis configured for that user. Add them in Settings or pass them with the emojis: option.");
     }
 
-    const COMMAND_OPTIONS = [
+    const BASE_OPTIONS = [
         {
             name: "userid",
             displayName: "userid",
-            description: "User ID of the target member",
-            displayDescription: "User ID of the target member",
-            type: 3,
+            description: "@ mention or user ID of the target member",
+            displayDescription: "@ mention or user ID of the target member",
+            type: 6, // USER — gives native @ picker
             required: true
         },
         {
@@ -683,12 +735,23 @@
         {
             name: "emojis",
             displayName: "emojis",
-            description: "Emojis to use, space-separated (leave blank to use configured ones)",
-            displayDescription: "Emojis to use, space-separated (leave blank to use configured ones)",
+            description: "Emoji names or reaction strings, space-separated (blank = use configured)",
+            displayDescription: "Emoji names or reaction strings, space-separated (blank = use configured)",
             type: 3,
             required: false
         }
     ];
+
+    const REACT_OPTIONS = BASE_OPTIONS.concat([
+        {
+            name: "superreact",
+            displayName: "superreact",
+            description: "Use super/burst reactions (requires Nitro)",
+            displayDescription: "Use super/burst reactions (requires Nitro)",
+            type: 5, // BOOLEAN
+            required: false
+        }
+    ]);
 
     var index = {
         onLoad() {
@@ -701,7 +764,7 @@
                 if (!authorId) return null;
                 const cfg = (_storage_users = storage.users) === null || _storage_users === void 0 ? void 0 : _storage_users[authorId];
                 if ((cfg === null || cfg === void 0 ? void 0 : cfg.enabled) && ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0) {
-                    reactToMessage(payload.channelId, payload.message.id, cfg.emojis);
+                    reactToMessage(payload.channelId, payload.message.id, cfg.emojis, cfg.superReact);
                 }
                 return null;
             };
@@ -714,7 +777,7 @@
                 displayDescription: "React to the last N messages from a user in this channel",
                 type: 1,
                 inputType: 1,
-                options: COMMAND_OPTIONS,
+                options: REACT_OPTIONS,
                 execute(args, ctx) {
                     runBulkCommand(args, ctx, "Reacted", reactToMessage);
                 }
@@ -727,7 +790,7 @@
                 displayDescription: "Remove your reactions from the last N messages from a user in this channel",
                 type: 1,
                 inputType: 1,
-                options: COMMAND_OPTIONS,
+                options: BASE_OPTIONS,
                 execute(args, ctx) {
                     runBulkCommand(args, ctx, "Unreacted", unreactFromMessage);
                 }
