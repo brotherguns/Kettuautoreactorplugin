@@ -220,29 +220,39 @@
         return h(View, {
             style: [S.card, { backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31") }]
         },
-            // Header row
-            h(View, { style: S.row },
-                h(View, { style: { flex: 1 } },
-                    h(Text, { style: [S.label, { color: c("TEXT_NORMAL", "#fff") }] }, cfg.label || userId),
-                    h(Text, { style: [S.uid, { color: c("TEXT_MUTED", "#aaa") }] }, userId)
+            // Header row — nowrap so switch and × never fall off screen
+            h(View, { style: { flexDirection: "row", alignItems: "center", flexWrap: "nowrap" } },
+                h(View, { style: { flex: 1, marginRight: 8, minWidth: 0 } },
+                    h(Text, {
+                        style: [S.label, { color: c("TEXT_NORMAL", "#fff") }],
+                        numberOfLines: 1,
+                        ellipsizeMode: "tail"
+                    }, cfg.label || userId),
+                    h(Text, {
+                        style: [S.uid, { color: c("TEXT_MUTED", "#aaa") }],
+                        numberOfLines: 1,
+                        ellipsizeMode: "middle"
+                    }, userId)
                 ),
                 h(Switch, {
                     value: cfg.enabled,
                     onValueChange: (v) => onToggle(userId, v),
-                    trackColor: { true: brand }
+                    trackColor: { true: brand },
+                    style: { flexShrink: 0 }
                 }),
                 h(TouchableOpacity, {
-                    style: [S.smBtn, { backgroundColor: danger }],
+                    style: [S.smBtn, { backgroundColor: danger, flexShrink: 0, marginLeft: 8 }],
                     onPress: () => onDelete(userId)
                 }, h(Text, { style: [S.smTxt, { color: "#fff" }] }, "\u2715"))
             ),
-            // Super react toggle row
-            h(View, { style: [S.row, { marginTop: 6, marginBottom: 2 }] },
+            // Super react toggle row — fixed layout, switch pinned right
+            h(View, { style: { flexDirection: "row", alignItems: "center", flexWrap: "nowrap", marginTop: 8, marginBottom: 2 } },
                 h(Text, { style: { fontSize: 12, color: gold, fontWeight: "700", flex: 1 } }, "\u26A1 Super React (Nitro)"),
                 h(Switch, {
                     value: !!cfg.superReact,
                     onValueChange: (v) => onSuperToggle(userId, v),
-                    trackColor: { true: gold }
+                    trackColor: { true: gold },
+                    style: { flexShrink: 0 }
                 })
             ),
             // Emoji chips
@@ -251,14 +261,14 @@
                     ? cfg.emojis.map((e, i) => h(EmojiChip, { key: i, reactionStr: e }))
                     : h(Text, { style: [S.hint, { color: c("TEXT_MUTED", "#aaa") }] }, "No emojis \u2014 tap Edit Emojis")
             ),
-            // Action buttons
-            h(View, { style: [S.row, { marginTop: 10, flexWrap: "nowrap" }] },
+            // Action buttons — equal width, stay inside card
+            h(View, { style: { flexDirection: "row", alignItems: "center", marginTop: 10 } },
                 h(TouchableOpacity, {
-                    style: [S.smBtn, { backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"), flex: 1, alignItems: "center" }],
+                    style: [S.smBtn, { backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"), flex: 1, alignItems: "center", marginLeft: 0 }],
                     onPress: () => onEdit(userId)
                 }, h(Text, { style: [S.smTxt, { color: c("TEXT_NORMAL", "#fff") }] }, "\u270F\uFE0F  Edit Emojis")),
                 h(TouchableOpacity, {
-                    style: [S.smBtn, { backgroundColor: brand, marginLeft: 8, flex: 1, alignItems: "center" }],
+                    style: [S.smBtn, { backgroundColor: brand, flex: 1, alignItems: "center", marginLeft: 8 }],
                     onPress: () => onReactExisting(userId)
                 }, h(Text, { style: [S.smTxt, { color: "#fff" }] }, "\u26A1 React Existing"))
             )
