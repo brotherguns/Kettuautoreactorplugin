@@ -23,12 +23,99 @@ function getToken(): string {
     return ts.getToken ? ts.getToken() : ts.token;
 }
 
-function reactToMessage(channelId: string, msgId: string, emojis: string[]) {
-    const token = getToken();
-    for (const emoji of emojis) {
-        const url = `https://discord.com/api/v9/channels/${channelId}/messages/${msgId}/reactions/${encodeURIComponent(emoji)}/@me`;
-        (HTTP as any).put({ url, headers: { Authorization: token } }).catch(() => {});
+const API_BASE = "https://discord.com/api/v9";
+const REACT_SPACING_MS = 350;   // gap between reactions to stay under the rate limit
+const MAX_429_RETRIES = 5;      // per-emoji retries when rate limited
+const MAX_VERIFY_ROUNDS = 3;    // re-check + re-apply passes after reacting
+const VERIFY_DELAY_MS = 1500;   // let reactions settle before verifying
+
+function delay(ms: number): Promise<void> {
+    return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+// Custom emoji ("<:name:id>", "<a:name:id>" or "name:id") -> "name:id" for the API path.
+// Anything else is treated as a unicode emoji and URL-encoded.
+function toApiEmoji(raw: string): string {
+    const m = /^<?a?:([^:>]+):(\d{15,})>?$/.exec(raw.trim());
+    if (m) return `${m[1]}:${m[2]}`;
+    return encodeURIComponent(raw.trim());
+}
+
+// Canonical identity used to check a configured emoji against message.reactions.
+function emojiIdentity(raw: string): { id?: string; name?: string } {
+    const m = /^<?a?:([^:>]+):(\d{15,})>?$/.exec(raw.trim());
+    if (m) return { id: m[2] };
+    return { name: raw.trim() };
+}
+
+function putReaction(channelId: string, msgId: string, raw: string): Promise<any> {
+    const url = `${API_BASE}/channels/${channelId}/messages/${msgId}/reactions/${toApiEmoji(raw)}/@me`;
+    return (HTTP as any).put({ url, headers: { Authorization: getToken() } });
+}
+
+function getMessage(channelId: string, msgId: string): Promise<any> {
+    const url = `${API_BASE}/channels/${channelId}/messages/${msgId}`;
+    return (HTTP as any).get({ url, headers: { Authorization: getToken() } });
+}
+
+// Apply one emoji, backing off and retrying when Discord rate-limits us (429).
+function applyOne(channelId: string, msgId: string, raw: string, attempt: number): Promise<void> {
+    return putReaction(channelId, msgId, raw).then(
+        () => delay(REACT_SPACING_MS),
+        (err: any) => {
+            if (err?.status === 429 && attempt < MAX_429_RETRIES) {
+                const retryAfter = err?.body?.retry_after;
+                const wait = retryAfter ? Math.ceil(retryAfter * 1000) + 100 : 1000;
+                return delay(wait).then(() => applyOne(channelId, msgId, raw, attempt + 1));
+            }
+            // Non-429 (already reacted, unknown emoji, transient) — move on; verify catches real gaps.
+            return delay(REACT_SPACING_MS);
+        },
+    );
+}
+
+function hasMyReaction(reactions: any[], raw: string): boolean {
+    const want = emojiIdentity(raw);
+    for (const r of reactions) {
+        if (!r?.me) continue;
+        const em = r.emoji || {};
+        if (want.id) {
+            if (em.id === want.id) return true;
+        } else if (!em.id && em.name === want.name) {
+            return true;
+        }
     }
+    return false;
+}
+
+// After reacting, fetch the message and confirm every configured emoji actually
+// landed; re-apply any that didn't (rate limits / transient failures) for a few rounds.
+function verifyAndFix(channelId: string, msgId: string, emojis: string[], round: number): Promise<void> {
+    if (round >= MAX_VERIFY_ROUNDS) return Promise.resolve();
+    return getMessage(channelId, msgId).then(
+        (res: any) => {
+            const reactions = res?.body?.reactions || [];
+            const missing = emojis.filter((e) => !hasMyReaction(reactions, e));
+            if (missing.length === 0) return;
+            let chain: Promise<void> = Promise.resolve();
+            for (const e of missing) chain = chain.then(() => applyOne(channelId, msgId, e, 0));
+            return chain
+                .then(() => delay(VERIFY_DELAY_MS))
+                .then(() => verifyAndFix(channelId, msgId, emojis, round + 1));
+        },
+        () => undefined,
+    );
+}
+
+function reactToMessage(channelId: string, msgId: string, emojis: string[]) {
+    // Apply sequentially (not in parallel) so we don't trip the reaction rate limit
+    // and silently drop emojis, then verify + backfill any that didn't stick.
+    let chain: Promise<void> = Promise.resolve();
+    for (const emoji of emojis) chain = chain.then(() => applyOne(channelId, msgId, emoji, 0));
+    chain
+        .then(() => delay(VERIFY_DELAY_MS))
+        .then(() => verifyAndFix(channelId, msgId, emojis, 0))
+        .catch(() => {});
 }
 
 const S = StyleSheet.create({
