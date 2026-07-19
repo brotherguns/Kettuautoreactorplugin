@@ -17,10 +17,16 @@
     // window.vendetta.plugin is undefined at bundle scope (the plugin context is
     // only passed as the loader's arrow param, which this IIFE doesn't consume), so
     // create our own MMKV-backed storage instead of reading vd.plugin.storage.
-    // storage.users: { [userId]: { label: string, emojis: string[], enabled: boolean } }
+    // users map: { [userId]: { label: string, emojis: string[], enabled: boolean } }
     const { createStorage, wrapSync, createMMKVBackend } = vd.storage;
     const storage = wrapSync(createStorage(createMMKVBackend("AutoReact")));
-    if (!storage.users) storage.users = {};
+    // wrapSync storage hydrates asynchronously, so getUsers() can be undefined at
+    // first read/render. Always go through this to guarantee it exists (bracket
+    // access here is intentional so it isn't rewritten to a recursive call).
+    function getUsers() {
+        if (!storage["users"]) storage["users"] = {};
+        return storage["users"];
+    }
     let interceptFn = null;
     function getToken() {
         const ts = TokenStore;
@@ -206,7 +212,7 @@
     }
     function UserCard({ userId, onToggle, onDelete, onEdit }) {
         var _cfg_emojis;
-        const cfg = storage.users[userId];
+        const cfg = getUsers()[userId];
         return h(View, {
             style: [
                 S.card,
@@ -315,7 +321,7 @@
             const uid = newId.trim();
             if (!uid) return;
             const emojiList = newEmojis.trim().split(/[\s,]+/).filter(Boolean);
-            storage.users[uid] = {
+            getUsers()[uid] = {
                 label: newLabel.trim() || uid,
                 emojis: emojiList,
                 enabled: true
@@ -326,8 +332,8 @@
             refresh();
         }
         function handleDelete(uid) {
-            var _storage_users_uid;
-            Alert.alert("Remove User", `Remove ${((_storage_users_uid = storage.users[uid]) === null || _storage_users_uid === void 0 ? void 0 : _storage_users_uid.label) || uid}?`, [
+            var _getUsers_uid;
+            Alert.alert("Remove User", `Remove ${((_getUsers_uid = getUsers()[uid]) === null || _getUsers_uid === void 0 ? void 0 : _getUsers_uid.label) || uid}?`, [
                 {
                     text: "Cancel",
                     style: "cancel"
@@ -336,24 +342,24 @@
                     text: "Remove",
                     style: "destructive",
                     onPress: ()=>{
-                        delete storage.users[uid];
+                        delete getUsers()[uid];
                         refresh();
                     }
                 }
             ]);
         }
         function handleEdit(uid) {
-            var _storage_users_uid;
+            var _getUsers_uid;
             setEditTarget(uid);
-            setEditInput((((_storage_users_uid = storage.users[uid]) === null || _storage_users_uid === void 0 ? void 0 : _storage_users_uid.emojis) || []).join(" "));
+            setEditInput((((_getUsers_uid = getUsers()[uid]) === null || _getUsers_uid === void 0 ? void 0 : _getUsers_uid.emojis) || []).join(" "));
         }
         function handleSaveEmojis() {
             if (!editTarget) return;
-            storage.users[editTarget].emojis = editInput.trim().split(/[\s,]+/).filter(Boolean);
+            getUsers()[editTarget].emojis = editInput.trim().split(/[\s,]+/).filter(Boolean);
             setEditTarget(null);
             refresh();
         }
-        if (editTarget && storage.users[editTarget]) {
+        if (editTarget && getUsers()[editTarget]) {
             return h(ScrollView, {
                 style: [
                     S.container,
@@ -368,7 +374,7 @@
                         color: c("TEXT_NORMAL", "#fff")
                     }
                 ]
-            }, `Emojis for ${storage.users[editTarget].label || editTarget}`), h(Text, {
+            }, `Emojis for ${getUsers()[editTarget].label || editTarget}`), h(Text, {
                 style: [
                     S.hint,
                     {
@@ -415,7 +421,7 @@
                 ]
             }, "Cancel")));
         }
-        const userKeys = Object.keys(storage.users);
+        const userKeys = Object.keys(getUsers());
         return h(ScrollView, {
             style: [
                 S.container,
@@ -504,7 +510,7 @@
                 key: uid + tick,
                 userId: uid,
                 onToggle: (u, v)=>{
-                    storage.users[u].enabled = v;
+                    getUsers()[u].enabled = v;
                     refresh();
                 },
                 onDelete: handleDelete,
@@ -518,7 +524,7 @@
                 if (payload.type !== "MESSAGE_CREATE" || payload.optimistic) return null;
                 const authorId = (_payload_message = payload.message) === null || _payload_message === void 0 ? void 0 : (_payload_message_author = _payload_message.author) === null || _payload_message_author === void 0 ? void 0 : _payload_message_author.id;
                 if (!authorId) return null;
-                const cfg = storage.users[authorId];
+                const cfg = getUsers()[authorId];
                 if ((cfg === null || cfg === void 0 ? void 0 : cfg.enabled) && ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0) {
                     reactToMessage(payload.channelId, payload.message.id, cfg.emojis);
                 }
