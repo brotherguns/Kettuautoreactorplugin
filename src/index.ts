@@ -109,8 +109,12 @@ function verifyAndFix(channelId: string, msgId: string, emojis: string[], round:
             const reactions = res?.body?.reactions || [];
             const missing = emojis.filter((e) => !hasMyReaction(reactions, e));
             if (missing.length === 0) return;
+            // NB: forEach (not for-of) — Hermes on this build does NOT create a
+            // fresh per-iteration binding for let/const loop variables, so a
+            // `for (const e of missing) ...() => applyOne(e)` closure would
+            // capture the LAST value only. forEach's param is function-scoped.
             let chain: Promise<void> = Promise.resolve();
-            for (const e of missing) chain = chain.then(() => applyOne(channelId, msgId, e, 0));
+            missing.forEach((e) => { chain = chain.then(() => applyOne(channelId, msgId, e, 0)); });
             return chain
                 .then(() => delay(VERIFY_DELAY_MS))
                 .then(() => verifyAndFix(channelId, msgId, emojis, round + 1));
@@ -122,8 +126,10 @@ function verifyAndFix(channelId: string, msgId: string, emojis: string[], round:
 function reactToMessage(channelId: string, msgId: string, emojis: string[]) {
     // Apply sequentially (not in parallel) so we don't trip the reaction rate limit
     // and silently drop emojis, then verify + backfill any that didn't stick.
+    // NB: forEach (not for-of) — see verifyAndFix; Hermes captures the loop
+    // variable by reference, so for-of would react with only the last emoji.
     let chain: Promise<void> = Promise.resolve();
-    for (const emoji of emojis) chain = chain.then(() => applyOne(channelId, msgId, emoji, 0));
+    emojis.forEach((emoji) => { chain = chain.then(() => applyOne(channelId, msgId, emoji, 0)); });
     chain
         .then(() => delay(VERIFY_DELAY_MS))
         .then(() => verifyAndFix(channelId, msgId, emojis, 0))
@@ -150,6 +156,25 @@ const S = StyleSheet.create({
 
 function c(key: string, fallback: string): string {
     return (tokens as any)?.colors?.[key] || fallback;
+}
+
+// Split a settings text field into individual emojis. There's no Intl.Segmenter
+// on this build, and the OS emoji keyboard inserts emojis with no separators, so
+// a plain whitespace split leaves several emojis mashed into one token — and only
+// that one "emoji" ever reacts. Split each whitespace/comma token into emoji
+// grapheme clusters via a Unicode-property regex; custom Discord emoji tokens
+// (<:name:id>, <a:name:id>, name:id) are kept intact.
+const EMOJI_CLUSTER_RE = /(?:<a?:[^:>\s]+:\d{15,}>)|(?:\p{Regional_Indicator}\p{Regional_Indicator})|(?:[\d#*]️?⃣)|(?:\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|️)?(?:‍\p{Extended_Pictographic}(?:\p{Emoji_Modifier}|️)?)*)/gu;
+function parseEmojis(text: string): string[] {
+    const out: string[] = [];
+    const tokens = text.trim().split(/[\s,]+/).filter(Boolean);
+    tokens.forEach((tok) => {
+        if (/^:?[^:>\s]+:\d{15,}$/.test(tok)) { out.push(tok); return; }
+        const m = tok.match(EMOJI_CLUSTER_RE);
+        if (m && m.length) m.forEach((e) => out.push(e));
+        else out.push(tok);
+    });
+    return out;
 }
 
 function UserCard({ userId, onToggle, onDelete, onEdit }: any) {
@@ -204,7 +229,7 @@ function Settings() {
     function handleAdd() {
         const uid = newId.trim();
         if (!uid) return;
-        const emojiList = newEmojis.trim().split(/[\s,]+/).filter(Boolean);
+        const emojiList = parseEmojis(newEmojis);
         getUsers()[uid] = { label: newLabel.trim() || uid, emojis: emojiList, enabled: true };
         setNewId(""); setNewLabel(""); setNewEmojis("");
         refresh();
@@ -224,7 +249,7 @@ function Settings() {
 
     function handleSaveEmojis() {
         if (!editTarget) return;
-        getUsers()[editTarget].emojis = editInput.trim().split(/[\s,]+/).filter(Boolean);
+        getUsers()[editTarget].emojis = parseEmojis(editInput);
         setEditTarget(null);
         refresh();
     }
