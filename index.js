@@ -14,6 +14,21 @@
     const TokenStore = findByStoreName("UserAuthTokenStore") || findByStoreName("AuthenticationStore");
     const FD = findByProps("_interceptors");
     const tokens = findByProps("unsafe_rawColors", "colors");
+    // Custom/server emoji lookup: getDisambiguatedEmojiContext().emojisByName maps a
+    // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
+    // server emojis entered as ":name:" (or a bare name).
+    const EmojiCtx = findByProps("getDisambiguatedEmojiContext");
+    // Resolve a custom-emoji shortcode ("blobcat" / ":blobcat:") to "name:id" for the
+    // reaction API, or null if it isn't a known custom emoji on this account.
+    function resolveCustom(name) {
+        try {
+            var _EmojiCtx_getDisambiguatedEmojiContext, _ctx_emojisByName;
+            const ctx = EmojiCtx === null || EmojiCtx === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext = EmojiCtx.getDisambiguatedEmojiContext) === null || _EmojiCtx_getDisambiguatedEmojiContext === void 0 ? void 0 : _EmojiCtx_getDisambiguatedEmojiContext.call(EmojiCtx);
+            const e = ctx === null || ctx === void 0 ? void 0 : (_ctx_emojisByName = ctx.emojisByName) === null || _ctx_emojisByName === void 0 ? void 0 : _ctx_emojisByName[name];
+            if (e === null || e === void 0 ? void 0 : e.id) return `${e.name}:${e.id}`;
+        } catch  {}
+        return null;
+    }
     // window.vendetta.plugin is undefined at bundle scope (the plugin context is
     // only passed as the loader's arrow param, which this IIFE doesn't consume), so
     // create our own MMKV-backed storage instead of reading vd.plugin.storage.
@@ -33,28 +48,46 @@
         return ts.getToken ? ts.getToken() : ts.token;
     }
     const API_BASE = "https://discord.com/api/v9";
-    const REACT_SPACING_MS = 350; // gap between reactions to stay under the rate limit
+    // Discord rate-limits reactions to ~1 per 300ms per message. We pace by the gap
+    // between request *starts* (not after each completes) so the network round-trip
+    // overlaps the wait — ~2x faster than a post-completion delay while staying clean.
+    const MIN_REACT_INTERVAL_MS = 320; // min gap between reaction request starts
     const MAX_429_RETRIES = 5; // per-emoji retries when rate limited
     const MAX_VERIFY_ROUNDS = 3; // re-check + re-apply passes after reacting
-    const VERIFY_DELAY_MS = 1500; // let reactions settle before verifying
+    const VERIFY_DELAY_MS = 1200; // let reactions settle before verifying
+    let lastReactStart = 0; // shared across messages for global pacing
     function delay(ms) {
         return new Promise((resolve)=>setTimeout(resolve, ms));
     }
-    // Custom emoji ("<:name:id>", "<a:name:id>" or "name:id") -> "name:id" for the API path.
-    // Anything else is treated as a unicode emoji and URL-encoded.
+    // "name:id" for the reaction API path. Accepts <:name:id>, <a:name:id>, name:id,
+    // a custom-emoji shortcode (":name:" / bare "name"), or a unicode emoji (encoded).
     function toApiEmoji(raw) {
-        const m = /^<?a?:([^:>]+):(\d{15,})>?$/.exec(raw.trim());
+        const t = raw.trim();
+        const m = /^<?a?:([^:>]+):(\d{15,})>?$/.exec(t);
         if (m) return `${m[1]}:${m[2]}`;
-        return encodeURIComponent(raw.trim());
+        const sc = /^:?([a-zA-Z0-9_~]+):?$/.exec(t);
+        if (sc) {
+            const resolved = resolveCustom(sc[1]);
+            if (resolved) return resolved;
+        }
+        return encodeURIComponent(t);
     }
     // Canonical identity used to check a configured emoji against message.reactions.
     function emojiIdentity(raw) {
-        const m = /^<?a?:([^:>]+):(\d{15,})>?$/.exec(raw.trim());
+        const t = raw.trim();
+        const m = /^<?a?:([^:>]+):(\d{15,})>?$/.exec(t);
         if (m) return {
             id: m[2]
         };
+        const sc = /^:?([a-zA-Z0-9_~]+):?$/.exec(t);
+        if (sc) {
+            const resolved = resolveCustom(sc[1]);
+            if (resolved) return {
+                id: resolved.split(":")[1]
+            };
+        }
         return {
-            name: raw.trim()
+            name: t
         };
     }
     function putReaction(channelId, msgId, raw) {
@@ -75,17 +108,22 @@
             }
         });
     }
-    // Apply one emoji, backing off and retrying when Discord rate-limits us (429).
+    // Apply one emoji: wait only long enough to keep reaction starts >= the interval
+    // apart, then PUT. Retries with backoff when Discord rate-limits us (429).
     function applyOne(channelId, msgId, raw, attempt) {
-        return putReaction(channelId, msgId, raw).then(()=>delay(REACT_SPACING_MS), (err)=>{
-            if ((err === null || err === void 0 ? void 0 : err.status) === 429 && attempt < MAX_429_RETRIES) {
-                var _err_body;
-                const retryAfter = err === null || err === void 0 ? void 0 : (_err_body = err.body) === null || _err_body === void 0 ? void 0 : _err_body.retry_after;
-                const wait = retryAfter ? Math.ceil(retryAfter * 1000) + 100 : 1000;
-                return delay(wait).then(()=>applyOne(channelId, msgId, raw, attempt + 1));
-            }
-            // Non-429 (already reacted, unknown emoji, transient) — move on; verify catches real gaps.
-            return delay(REACT_SPACING_MS);
+        const gap = Math.max(0, MIN_REACT_INTERVAL_MS - (Date.now() - lastReactStart));
+        return delay(gap).then(()=>{
+            lastReactStart = Date.now();
+            return putReaction(channelId, msgId, raw).then(()=>undefined, (err)=>{
+                if ((err === null || err === void 0 ? void 0 : err.status) === 429 && attempt < MAX_429_RETRIES) {
+                    var _err_body;
+                    const retryAfter = err === null || err === void 0 ? void 0 : (_err_body = err.body) === null || _err_body === void 0 ? void 0 : _err_body.retry_after;
+                    const wait = retryAfter ? Math.ceil(retryAfter * 1000) + 100 : 1000;
+                    return delay(wait).then(()=>applyOne(channelId, msgId, raw, attempt + 1));
+                }
+                // Non-429 (already reacted, unknown emoji, transient) — move on; verify catches real gaps.
+                return undefined;
+            });
         });
     }
     function hasMyReaction(reactions, raw) {
@@ -412,11 +450,11 @@
                         color: c("TEXT_MUTED", "#aaa")
                     }
                 ]
-            }, "Space or comma separated"), h(TextInput, {
+            }, "Emojis and/or server emojis as :name:"), h(TextInput, {
                 style: inputStyle,
                 value: editInput,
                 onChangeText: setEditInput,
-                placeholder: "\uD83D\uDC4D \uD83D\uDD25 \u2764\uFE0F",
+                placeholder: "\uD83D\uDC4D \uD83D\uDD25 :blobcat:",
                 placeholderTextColor: c("TEXT_MUTED", "#aaa"),
                 multiline: true
             }), h(TouchableOpacity, {
@@ -501,11 +539,11 @@
                     color: c("TEXT_MUTED", "#aaa")
                 }
             ]
-        }, "Emojis"), h(TextInput, {
+        }, "Emojis (server emojis as :name:)"), h(TextInput, {
             style: inputStyle,
             value: newEmojis,
             onChangeText: setNewEmojis,
-            placeholder: "\uD83D\uDC4D \uD83D\uDD25",
+            placeholder: "\uD83D\uDC4D \uD83D\uDD25 :blobcat:",
             placeholderTextColor: c("TEXT_MUTED", "#aaa")
         }), h(TouchableOpacity, {
             style: [
