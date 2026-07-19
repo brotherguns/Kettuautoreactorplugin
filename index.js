@@ -486,21 +486,31 @@
             style: S.chipTxt
         }, d.text));
     }
-    function avatarUri(userId) {
+    // RN Image `source` for a user's avatar. getAvatarURL returns a STRING URL for
+    // users with a custom avatar, but a NUMBER (a local RN asset id for Discord's
+    // default avatar) for users without one — so return {uri} for the former and the
+    // number as-is for the latter. null => user not cached => caller shows initial.
+    function avatarSource(userId) {
         try {
             var _UserStore_getUser;
             const u = UserStore === null || UserStore === void 0 ? void 0 : (_UserStore_getUser = UserStore.getUser) === null || _UserStore_getUser === void 0 ? void 0 : _UserStore_getUser.call(UserStore, userId);
-            if (u === null || u === void 0 ? void 0 : u.getAvatarURL) return u.getAvatarURL(null, 128, true);
-            if (u === null || u === void 0 ? void 0 : u.avatar) return `https://cdn.discordapp.com/avatars/${userId}/${u.avatar}.png?size=128`;
+            if (u === null || u === void 0 ? void 0 : u.getAvatarURL) {
+                const r = u.getAvatarURL(null, 128, true);
+                if (typeof r === "string" && r) return {
+                    uri: r
+                };
+                if (typeof r === "number") return r;
+            }
+            if (u === null || u === void 0 ? void 0 : u.avatar) return {
+                uri: `https://cdn.discordapp.com/avatars/${userId}/${u.avatar}.png?size=128`
+            };
         } catch  {}
         return null;
     }
     function Avatar({ userId, label }) {
-        const uri = avatarUri(userId);
-        if (uri) return h(Image, {
-            source: {
-                uri
-            },
+        const src = avatarSource(userId);
+        if (src != null) return h(Image, {
+            source: src,
             style: S.avatar
         });
         const initial = ((label || "?").trim().charAt(0) || "?").toUpperCase();
