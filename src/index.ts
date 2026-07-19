@@ -13,6 +13,7 @@ const TokenStore = findByStoreName("UserAuthTokenStore") || findByStoreName("Aut
 const FD = findByProps("_interceptors");
 const tokens = findByProps("unsafe_rawColors", "colors");
 const UserStore = findByStoreName("UserStore");
+const ThemeStore = findByStoreName("ThemeStore");
 // Custom/server emoji lookup: getDisambiguatedEmojiContext().emojisByName maps a
 // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
 // server emojis entered as ":name:" (or a bare name).
@@ -230,8 +231,23 @@ const S = StyleSheet.create({
     backTxt: { fontSize: 15, fontWeight: "700" },
 });
 
+// Resolve a Discord semantic color token to a hex string for the ACTIVE theme.
+// tokens.colors[KEY] is an opaque SemanticColor object (serializes as {}), which
+// RN can't use directly as a color in this settings tree — passing it renders as
+// black/invalid, making the UI unreadable on dark/AMOLED themes like "midnight".
+// Resolve it via tokens.internal.resolveSemanticColor; fall back to a fixed color
+// when the key isn't a known semantic color (e.g. the blurple brand).
 function c(key: string, fallback: string): string {
-    return (tokens as any)?.colors?.[key] || fallback;
+    try {
+        const t = tokens as any;
+        const sc = t?.colors?.[key];
+        const resolve = t?.internal?.resolveSemanticColor;
+        if (sc && resolve) {
+            const out = resolve((ThemeStore as any)?.theme, sc);
+            if (typeof out === "string" && out) return out;
+        }
+    } catch { /* fall through to fallback */ }
+    return fallback;
 }
 
 // How to render a stored emoji token in the UI: a custom-emoji CDN image, or text.
