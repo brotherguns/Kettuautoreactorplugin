@@ -15,6 +15,7 @@
     const FD = findByProps("_interceptors");
     const tokens = findByProps("unsafe_rawColors", "colors");
     const UserStore = findByStoreName("UserStore");
+    const ThemeStore = findByStoreName("ThemeStore");
     // Custom/server emoji lookup: getDisambiguatedEmojiContext().emojisByName maps a
     // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
     // server emojis entered as ":name:" (or a bare name).
@@ -397,9 +398,24 @@
             fontWeight: "700"
         }
     });
+    // Resolve a Discord semantic color token to a hex string for the ACTIVE theme.
+    // tokens.colors[KEY] is an opaque SemanticColor object (serializes as {}), which
+    // RN can't use directly as a color in this settings tree — passing it renders as
+    // black/invalid, making the UI unreadable on dark/AMOLED themes like "midnight".
+    // Resolve it via tokens.internal.resolveSemanticColor; fall back to a fixed color
+    // when the key isn't a known semantic color (e.g. the blurple brand).
     function c(key, fallback) {
-        var _tokens_colors;
-        return (tokens === null || tokens === void 0 ? void 0 : (_tokens_colors = tokens.colors) === null || _tokens_colors === void 0 ? void 0 : _tokens_colors[key]) || fallback;
+        try {
+            var _t_colors, _t_internal;
+            const t = tokens;
+            const sc = t === null || t === void 0 ? void 0 : (_t_colors = t.colors) === null || _t_colors === void 0 ? void 0 : _t_colors[key];
+            const resolve = t === null || t === void 0 ? void 0 : (_t_internal = t.internal) === null || _t_internal === void 0 ? void 0 : _t_internal.resolveSemanticColor;
+            if (sc && resolve) {
+                const out = resolve(ThemeStore === null || ThemeStore === void 0 ? void 0 : ThemeStore.theme, sc);
+                if (typeof out === "string" && out) return out;
+            }
+        } catch  {}
+        return fallback;
     }
     // How to render a stored emoji token in the UI: a custom-emoji CDN image, or text.
     function emojiDisplay(raw) {
