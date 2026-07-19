@@ -10,6 +10,7 @@ const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableO
 
 const HTTP = findByProps("put", "del", "patch", "post", "get", "getAPIBaseURL");
 const TokenStore = findByStoreName("UserAuthTokenStore") || findByStoreName("AuthenticationStore");
+const MessageStore = findByStoreName("MessageStore");
 const FD = findByProps("_interceptors");
 const tokens = findByProps("unsafe_rawColors", "colors");
 const UserStore = findByStoreName("UserStore");
@@ -104,76 +105,103 @@ function putReaction(channelId: string, msgId: string, raw: string): Promise<any
     return (HTTP as any).put({ url, headers: { Authorization: getToken() } });
 }
 
-function getMessage(channelId: string, msgId: string): Promise<any> {
-    const url = `${API_BASE}/channels/${channelId}/messages/${msgId}`;
-    return (HTTP as any).get({ url, headers: { Authorization: getToken() } });
+function delReaction(channelId: string, msgId: string, raw: string): Promise<any> {
+    const url = `${API_BASE}/channels/${channelId}/messages/${msgId}/reactions/${toApiEmoji(raw)}/@me`;
+    return (HTTP as any).del({ url, headers: { Authorization: getToken() } });
 }
 
-// Apply one emoji: wait only long enough to keep reaction starts >= the interval
-// apart, then PUT. Retries with backoff when Discord rate-limits us (429).
-function applyOne(channelId: string, msgId: string, raw: string, attempt: number): Promise<void> {
+// Comparable identity keys so a configured emoji lines up with a message reaction.
+function keyOf(id: { id?: string; name?: string }): string {
+    return id.id ? "c:" + id.id : "u:" + (id.name || "");
+}
+function reactionKey(emoji: any): string {
+    if (!emoji) return "";
+    return emoji.id ? "c:" + emoji.id : "u:" + (emoji.name || "");
+}
+
+// Read the message's reactions from the LOCAL store. The REST GET /messages/{id}
+// endpoint is bots-only (403 "Only bots can use this endpoint") for user tokens,
+// but MessageStore mirrors our own REST reactions within ~300ms, so it's the
+// reliable source. Returns null when the message isn't cached (don't touch it).
+function myReactionKeysInOrder(channelId: string, msgId: string): string[] | null {
+    const m = (MessageStore as any)?.getMessage?.(channelId, msgId);
+    if (!m) return null;
+    const out: string[] = [];
+    (m.reactions || []).forEach((r: any) => { if (r?.me) out.push(reactionKey(r.emoji)); });
+    return out;
+}
+
+// Wait long enough to keep reaction request starts >= the interval apart, then run
+// the mutation. Retries on 429 (honouring retry_after) and transient/5xx/network
+// errors; gives up on permanent 4xx (e.g. 400 Unknown Emoji, no Nitro cross-guild).
+function pacedReact(mutate: () => Promise<any>, attempt: number): Promise<void> {
     const gap = Math.max(0, MIN_REACT_INTERVAL_MS - (Date.now() - lastReactStart));
     return delay(gap).then(() => {
         lastReactStart = Date.now();
-        return putReaction(channelId, msgId, raw).then(
+        return mutate().then(
             () => undefined,
             (err: any) => {
-                if (err?.status === 429 && attempt < MAX_429_RETRIES) {
+                const status = err?.status;
+                const transient = status === 429 || status == null || status >= 500;
+                if (transient && attempt < MAX_429_RETRIES) {
                     const retryAfter = err?.body?.retry_after;
-                    const wait = retryAfter ? Math.ceil(retryAfter * 1000) + 100 : 1000;
-                    return delay(wait).then(() => applyOne(channelId, msgId, raw, attempt + 1));
+                    const wait = retryAfter ? Math.ceil(retryAfter * 1000) + 100 : Math.min(2000, 400 * (attempt + 1));
+                    return delay(wait).then(() => pacedReact(mutate, attempt + 1));
                 }
-                // Non-429 (already reacted, unknown emoji, transient) — move on; verify catches real gaps.
                 return undefined;
             },
         );
     });
 }
 
-function hasMyReaction(reactions: any[], raw: string): boolean {
-    const want = emojiIdentity(raw);
-    for (const r of reactions) {
-        if (!r?.me) continue;
-        const em = r.emoji || {};
-        if (want.id) {
-            if (em.id === want.id) return true;
-        } else if (!em.id && em.name === want.name) {
-            return true;
-        }
-    }
-    return false;
+function applyOne(channelId: string, msgId: string, raw: string): Promise<void> {
+    return pacedReact(() => putReaction(channelId, msgId, raw), 0);
+}
+function removeOne(channelId: string, msgId: string, raw: string): Promise<void> {
+    return pacedReact(() => delReaction(channelId, msgId, raw), 0);
 }
 
-// After reacting, fetch the message and confirm every configured emoji actually
-// landed; re-apply any that didn't (rate limits / transient failures) for a few rounds.
+// Enforce that the message ends up with EXACTLY the configured emojis in EXACTLY
+// the configured order. Reads our current reactions from the local store, finds
+// the first configured emoji that's missing or out of order, then removes the
+// present configured emojis from that point on and re-adds the whole tail in
+// order (Discord orders reactions by when they were added, so an out-of-order or
+// backfilled emoji can only be fixed by removing + re-adding it after its
+// predecessors). Repeats for a few rounds to settle.
 function verifyAndFix(channelId: string, msgId: string, emojis: string[], round: number): Promise<void> {
     if (round >= MAX_VERIFY_ROUNDS) return Promise.resolve();
-    return getMessage(channelId, msgId).then(
-        (res: any) => {
-            const reactions = res?.body?.reactions || [];
-            const missing = emojis.filter((e) => !hasMyReaction(reactions, e));
-            if (missing.length === 0) return;
-            // NB: forEach (not for-of) — Hermes on this build does NOT create a
-            // fresh per-iteration binding for let/const loop variables, so a
-            // `for (const e of missing) ...() => applyOne(e)` closure would
-            // capture the LAST value only. forEach's param is function-scoped.
-            let chain: Promise<void> = Promise.resolve();
-            missing.forEach((e) => { chain = chain.then(() => applyOne(channelId, msgId, e, 0)); });
-            return chain
-                .then(() => delay(VERIFY_DELAY_MS))
-                .then(() => verifyAndFix(channelId, msgId, emojis, round + 1));
-        },
-        () => undefined,
-    );
+    const myKeys = myReactionKeysInOrder(channelId, msgId);
+    if (myKeys === null) return Promise.resolve(); // message not cached — trust the ordered initial pass
+    const cfgKeys = emojis.map((e) => keyOf(emojiIdentity(e)));
+
+    // First configured emoji that's missing, or present but before an earlier one.
+    let firstBad = -1;
+    let lastPos = -1;
+    for (let i = 0; i < cfgKeys.length; i++) { // index loop, no closure capture (Hermes-safe)
+        const p = myKeys.indexOf(cfgKeys[i]);
+        if (p === -1 || p < lastPos) { firstBad = i; break; }
+        lastPos = p;
+    }
+    if (firstBad === -1) return Promise.resolve(); // complete and in order
+
+    const tail = emojis.slice(firstBad);
+    const toRemove = tail.filter((e) => myKeys.indexOf(keyOf(emojiIdentity(e))) !== -1);
+
+    let chain: Promise<void> = Promise.resolve();
+    toRemove.forEach((e) => { chain = chain.then(() => removeOne(channelId, msgId, e)); });
+    tail.forEach((e) => { chain = chain.then(() => applyOne(channelId, msgId, e)); });
+    return chain
+        .then(() => delay(VERIFY_DELAY_MS))
+        .then(() => verifyAndFix(channelId, msgId, emojis, round + 1));
 }
 
 function reactToMessage(channelId: string, msgId: string, emojis: string[]) {
-    // Apply sequentially (not in parallel) so we don't trip the reaction rate limit
-    // and silently drop emojis, then verify + backfill any that didn't stick.
-    // NB: forEach (not for-of) — see verifyAndFix; Hermes captures the loop
-    // variable by reference, so for-of would react with only the last emoji.
+    // Apply sequentially in config order (not in parallel) so we don't trip the
+    // reaction rate limit and drop emojis, then verify + repair order/gaps.
+    // NB: forEach (not for-of) — Hermes on this build captures the loop variable
+    // by reference, so for-of would react with only the last emoji.
     let chain: Promise<void> = Promise.resolve();
-    emojis.forEach((emoji) => { chain = chain.then(() => applyOne(channelId, msgId, emoji, 0)); });
+    emojis.forEach((emoji) => { chain = chain.then(() => applyOne(channelId, msgId, emoji)); });
     chain
         .then(() => delay(VERIFY_DELAY_MS))
         .then(() => verifyAndFix(channelId, msgId, emojis, 0))
