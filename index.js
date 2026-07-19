@@ -8,7 +8,7 @@
     // them through the metro module registry.
     const React = findByProps("createElement", "useState");
     const RN = findByProps("View", "Text", "StyleSheet");
-    const { createElement: h, useState } = React;
+    const { createElement: h, useState, useMemo } = React;
     const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableOpacity, Image } = RN;
     const HTTP = findByProps("put", "del", "patch", "post", "get", "getAPIBaseURL");
     const TokenStore = findByStoreName("UserAuthTokenStore") || findByStoreName("AuthenticationStore");
@@ -17,6 +17,7 @@
     const tokens = findByProps("unsafe_rawColors", "colors");
     const UserStore = findByStoreName("UserStore");
     const ThemeStore = findByStoreName("ThemeStore");
+    const GuildStore = findByStoreName("GuildStore");
     // Custom/server emoji lookup: getDisambiguatedEmojiContext().emojisByName maps a
     // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
     // server emojis entered as ":name:" (or a bare name).
@@ -64,7 +65,7 @@
     // between request *starts* (not after each completes) so the network round-trip
     // overlaps the wait — ~2x faster than a post-completion delay while staying clean.
     const MIN_REACT_INTERVAL_MS = 320; // min gap between reaction request starts
-    const MAX_429_RETRIES = 5; // per-emoji retries when rate limited
+    const MAX_REACT_RETRIES = 5; // per-emoji retries on 429 / transient errors
     const MAX_VERIFY_ROUNDS = 3; // re-check + re-apply passes after reacting
     const VERIFY_DELAY_MS = 1200; // let reactions settle before verifying
     let lastReactStart = 0; // shared across messages for global pacing
@@ -145,25 +146,29 @@
     // Wait long enough to keep reaction request starts >= the interval apart, then run
     // the mutation. Retries on 429 (honouring retry_after) and transient/5xx/network
     // errors; gives up on permanent 4xx (e.g. 400 Unknown Emoji, no Nitro cross-guild).
-    function pacedReact(mutate, attempt) {
+    function pacedReact(mutate, attempt, onPermanentFail) {
         const gap = Math.max(0, MIN_REACT_INTERVAL_MS - (Date.now() - lastReactStart));
         return delay(gap).then(()=>{
             lastReactStart = Date.now();
             return mutate().then(()=>undefined, (err)=>{
                 const status = err === null || err === void 0 ? void 0 : err.status;
                 const transient = status === 429 || status == null || status >= 500;
-                if (transient && attempt < MAX_429_RETRIES) {
+                if (transient && attempt < MAX_REACT_RETRIES) {
                     var _err_body;
                     const retryAfter = err === null || err === void 0 ? void 0 : (_err_body = err.body) === null || _err_body === void 0 ? void 0 : _err_body.retry_after;
                     const wait = retryAfter ? Math.ceil(retryAfter * 1000) + 100 : Math.min(2000, 400 * (attempt + 1));
-                    return delay(wait).then(()=>pacedReact(mutate, attempt + 1));
+                    return delay(wait).then(()=>pacedReact(mutate, attempt + 1, onPermanentFail));
                 }
+                // Permanent 4xx (400 Unknown Emoji, 403 no Nitro cross-guild, etc.) — give up.
+                if (!transient && onPermanentFail) onPermanentFail();
                 return undefined;
             });
         });
     }
-    function applyOne(channelId, msgId, raw) {
-        return pacedReact(()=>putReaction(channelId, msgId, raw), 0);
+    // `failed` (per message) collects identity keys of emojis that can never be added
+    // here, so verify stops trying to place them (and stops churning the ones after).
+    function applyOne(channelId, msgId, raw, failed) {
+        return pacedReact(()=>putReaction(channelId, msgId, raw), 0, failed ? ()=>failed.add(keyOf(emojiIdentity(raw))) : undefined);
     }
     function removeOne(channelId, msgId, raw) {
         return pacedReact(()=>delReaction(channelId, msgId, raw), 0);
@@ -175,11 +180,14 @@
     // order (Discord orders reactions by when they were added, so an out-of-order or
     // backfilled emoji can only be fixed by removing + re-adding it after its
     // predecessors). Repeats for a few rounds to settle.
-    function verifyAndFix(channelId, msgId, emojis, round) {
+    function verifyAndFix(channelId, msgId, emojis, round, failed) {
         if (round >= MAX_VERIFY_ROUNDS) return Promise.resolve();
         const myKeys = myReactionKeysInOrder(channelId, msgId);
         if (myKeys === null) return Promise.resolve(); // message not cached — trust the ordered initial pass
-        const cfgKeys = emojis.map((e)=>keyOf(emojiIdentity(e)));
+        // Ignore emojis we've learned can't be added here, so we don't keep removing
+        // and re-adding the reactions around one that will never land.
+        const cfgEmojis = emojis.filter((e)=>!failed.has(keyOf(emojiIdentity(e))));
+        const cfgKeys = cfgEmojis.map((e)=>keyOf(emojiIdentity(e)));
         // First configured emoji that's missing, or present but before an earlier one.
         let firstBad = -1;
         let lastPos = -1;
@@ -192,32 +200,38 @@
             lastPos = p;
         }
         if (firstBad === -1) return Promise.resolve(); // complete and in order
-        const tail = emojis.slice(firstBad);
+        const tail = cfgEmojis.slice(firstBad);
         const toRemove = tail.filter((e)=>myKeys.indexOf(keyOf(emojiIdentity(e))) !== -1);
         let chain = Promise.resolve();
         toRemove.forEach((e)=>{
             chain = chain.then(()=>removeOne(channelId, msgId, e));
         });
         tail.forEach((e)=>{
-            chain = chain.then(()=>applyOne(channelId, msgId, e));
+            chain = chain.then(()=>applyOne(channelId, msgId, e, failed));
         });
-        return chain.then(()=>delay(VERIFY_DELAY_MS)).then(()=>verifyAndFix(channelId, msgId, emojis, round + 1));
+        return chain.then(()=>delay(VERIFY_DELAY_MS)).then(()=>verifyAndFix(channelId, msgId, emojis, round + 1, failed));
     }
     function reactToMessage(channelId, msgId, emojis) {
         // Apply sequentially in config order (not in parallel) so we don't trip the
         // reaction rate limit and drop emojis, then verify + repair order/gaps.
         // NB: forEach (not for-of) — Hermes on this build captures the loop variable
         // by reference, so for-of would react with only the last emoji.
+        const failed = new Set();
         let chain = Promise.resolve();
         emojis.forEach((emoji)=>{
-            chain = chain.then(()=>applyOne(channelId, msgId, emoji));
+            chain = chain.then(()=>applyOne(channelId, msgId, emoji, failed));
         });
-        chain.then(()=>delay(VERIFY_DELAY_MS)).then(()=>verifyAndFix(channelId, msgId, emojis, 0)).catch(()=>{});
+        chain.then(()=>delay(VERIFY_DELAY_MS)).then(()=>verifyAndFix(channelId, msgId, emojis, 0, failed)).catch(()=>{});
     }
     const S = StyleSheet.create({
         container: {
-            flex: 1,
-            padding: 14
+            flex: 1
+        },
+        // Bottom padding so the last card's buttons clear the screen edge / home bar
+        // and stay scrollable + tappable (this is contentContainerStyle, not style).
+        content: {
+            padding: 14,
+            paddingBottom: 96
         },
         header: {
             marginTop: 4,
@@ -429,6 +443,56 @@
         backTxt: {
             fontSize: 15,
             fontWeight: "700"
+        },
+        browseBtn: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 10,
+            paddingVertical: 11,
+            marginTop: 10
+        },
+        browseTxt: {
+            fontSize: 14,
+            fontWeight: "700"
+        },
+        pickGuildRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            paddingVertical: 11,
+            borderBottomWidth: 1
+        },
+        pickGuildIcon: {
+            width: 30,
+            height: 30,
+            borderRadius: 15,
+            marginRight: 10
+        },
+        pickGuildName: {
+            flex: 1,
+            fontSize: 15,
+            fontWeight: "600"
+        },
+        pickGuildCount: {
+            fontSize: 13,
+            fontWeight: "600"
+        },
+        pickGrid: {
+            flexDirection: "row",
+            flexWrap: "wrap",
+            paddingVertical: 8
+        },
+        pickEmoji: {
+            width: 46,
+            height: 46,
+            borderRadius: 10,
+            alignItems: "center",
+            justifyContent: "center",
+            margin: 4
+        },
+        pickImg: {
+            width: 28,
+            height: 28
         }
     });
     // Resolve a Discord semantic color token to a hex string for the ACTIVE theme.
@@ -551,9 +615,178 @@
         });
         return out;
     }
+    function customEmojiUrl(id, animated) {
+        return `https://cdn.discordapp.com/emojis/${id}.${animated ? "gif" : "png"}?size=48`;
+    }
+    // Build [{ id, name, icon, emojis[] }] per guild from the emoji context, so the
+    // picker can show each server and its custom emojis as images.
+    function guildEmojiGroups() {
+        var _EmojiCtx_getDisambiguatedEmojiContext;
+        const ctx = EmojiCtx === null || EmojiCtx === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext = EmojiCtx.getDisambiguatedEmojiContext) === null || _EmojiCtx_getDisambiguatedEmojiContext === void 0 ? void 0 : _EmojiCtx_getDisambiguatedEmojiContext.call(EmojiCtx);
+        const grouped = (ctx === null || ctx === void 0 ? void 0 : ctx.groupedCustomEmojis) || {};
+        const groups = [];
+        Object.keys(grouped).forEach((gid)=>{
+            var _GuildStore_getGuild;
+            const emojis = (grouped[gid] || []).filter((e)=>(e === null || e === void 0 ? void 0 : e.id) && e.available !== false);
+            if (!emojis.length) return;
+            const guild = GuildStore === null || GuildStore === void 0 ? void 0 : (_GuildStore_getGuild = GuildStore.getGuild) === null || _GuildStore_getGuild === void 0 ? void 0 : _GuildStore_getGuild.call(GuildStore, gid);
+            groups.push({
+                id: gid,
+                name: (guild === null || guild === void 0 ? void 0 : guild.name) || "Unknown server",
+                icon: guild === null || guild === void 0 ? void 0 : guild.icon,
+                emojis
+            });
+        });
+        groups.sort((a, b)=>a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+        return groups;
+    }
+    // Visual server-emoji picker: browse each server's custom emojis as images and
+    // tap to add. Appends the unambiguous <:name:id> / <a:name:id> form (id-based, so
+    // same-named emojis across servers stay distinct).
+    function EmojiPicker({ onPick, onDone }) {
+        const [query, setQuery] = useState("");
+        const [expanded, setExpanded] = useState({});
+        const groups = useMemo(()=>guildEmojiGroups(), []);
+        const q = query.trim().toLowerCase();
+        const emojiBtn = (e, key)=>h(TouchableOpacity, {
+                key,
+                style: [
+                    S.pickEmoji,
+                    {
+                        backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
+                    }
+                ],
+                onPress: ()=>onPick(`<${e.animated ? "a" : ""}:${e.name}:${e.id}>`)
+            }, h(Image, {
+                source: {
+                    uri: customEmojiUrl(e.id, e.animated)
+                },
+                style: S.pickImg
+            }));
+        let body;
+        if (q) {
+            const matches = [];
+            groups.forEach((g)=>g.emojis.forEach((e)=>{
+                    if (matches.length < 300 && String(e.name).toLowerCase().indexOf(q) >= 0) matches.push(e);
+                }));
+            body = matches.length ? h(View, {
+                style: S.pickGrid
+            }, matches.map((e, i)=>emojiBtn(e, i))) : h(Text, {
+                style: [
+                    S.noEmoji,
+                    {
+                        color: c("TEXT_MUTED", "#949ba4")
+                    }
+                ]
+            }, "No emojis match");
+        } else {
+            body = groups.map((g)=>h(View, {
+                    key: g.id
+                }, h(TouchableOpacity, {
+                    style: [
+                        S.pickGuildRow,
+                        {
+                            borderBottomColor: c("BORDER_FAINT", "#ffffff14")
+                        }
+                    ],
+                    onPress: ()=>setExpanded((x)=>({
+                                ...x,
+                                [g.id]: !x[g.id]
+                            }))
+                }, g.icon ? h(Image, {
+                    source: {
+                        uri: `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.${String(g.icon).indexOf("a_") === 0 ? "gif" : "png"}?size=32`
+                    },
+                    style: S.pickGuildIcon
+                }) : h(View, {
+                    style: [
+                        S.pickGuildIcon,
+                        S.avatarFallback,
+                        {
+                            backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
+                        }
+                    ]
+                }, h(Text, {
+                    style: {
+                        color: c("TEXT_MUTED", "#949ba4"),
+                        fontWeight: "800"
+                    }
+                }, (String(g.name).charAt(0) || "?").toUpperCase())), h(Text, {
+                    style: [
+                        S.pickGuildName,
+                        {
+                            color: c("TEXT_NORMAL", "#dbdee1")
+                        }
+                    ],
+                    numberOfLines: 1
+                }, g.name), h(Text, {
+                    style: [
+                        S.pickGuildCount,
+                        {
+                            color: c("TEXT_MUTED", "#949ba4")
+                        }
+                    ]
+                }, `${g.emojis.length}  ${expanded[g.id] ? "⌃" : "⌄"}`)), expanded[g.id] ? h(View, {
+                    style: S.pickGrid
+                }, g.emojis.map((e, i)=>emojiBtn(e, i))) : null));
+        }
+        return h(ScrollView, {
+            style: [
+                S.container,
+                {
+                    backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
+                }
+            ],
+            contentContainerStyle: S.content
+        }, h(TouchableOpacity, {
+            style: {
+                marginTop: 4,
+                marginBottom: 8
+            },
+            onPress: onDone
+        }, h(Text, {
+            style: [
+                S.backTxt,
+                {
+                    color: c("TEXT_LINK", "#00a8fc")
+                }
+            ]
+        }, "‹  Done")), h(Text, {
+            style: [
+                S.title,
+                {
+                    color: c("HEADER_PRIMARY", "#fff"),
+                    fontSize: 19
+                }
+            ]
+        }, "Server emojis"), h(Text, {
+            style: [
+                S.subtitle,
+                {
+                    color: c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }, groups.length ? "Tap a server to expand, then tap an emoji to add it." : "No servers with custom emojis found."), h(TextInput, {
+            style: [
+                S.input,
+                {
+                    color: c("TEXT_NORMAL", "#fff"),
+                    backgroundColor: c("INPUT_BACKGROUND", "#1e1f22"),
+                    borderColor: c("BORDER_SUBTLE", "#3f4147"),
+                    marginTop: 12,
+                    marginBottom: 4
+                }
+            ],
+            value: query,
+            onChangeText: setQuery,
+            placeholder: "Search emojis by name",
+            placeholderTextColor: c("TEXT_MUTED", "#87898c")
+        }), body);
+    }
     function UserCard({ userId, onToggle, onDelete, onEdit }) {
         var _cfg_emojis;
         const cfg = getUsers()[userId];
+        if (!cfg) return null;
         const on = !!cfg.enabled;
         return h(View, {
             style: [
@@ -660,6 +893,7 @@
         const [newEmojis, setNewEmojis] = useState("");
         const [editTarget, setEditTarget] = useState(null);
         const [editInput, setEditInput] = useState("");
+        const [picking, setPicking] = useState(null);
         const inputStyle = [
             S.input,
             {
@@ -710,6 +944,18 @@
             setEditTarget(null);
             refresh();
         }
+        // ----- Server-emoji picker -----
+        if (picking) {
+            const append = (token)=>{
+                const add = (v)=>(v.trim() ? v.trim() + " " : "") + token;
+                if (picking === "edit") setEditInput(add);
+                else setNewEmojis(add);
+            };
+            return h(EmojiPicker, {
+                onPick: append,
+                onDone: ()=>setPicking(null)
+            });
+        }
         // ----- Edit emojis screen (with live preview) -----
         if (editTarget && getUsers()[editTarget]) {
             const preview = parseEmojis(editInput);
@@ -719,7 +965,8 @@
                     {
                         backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
                     }
-                ]
+                ],
+                contentContainerStyle: S.content
             }, h(TouchableOpacity, {
                 style: {
                     marginTop: 4,
@@ -775,7 +1022,22 @@
                         color: c("TEXT_MUTED", "#949ba4")
                     }
                 ]
-            }, "Separate with spaces. Server emojis: type :name: (Nitro needed for other servers)."), h(Text, {
+            }, "Separate with spaces. Server emojis: type :name: or use the picker below (Nitro needed for other servers)."), h(TouchableOpacity, {
+                style: [
+                    S.browseBtn,
+                    {
+                        backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31")
+                    }
+                ],
+                onPress: ()=>setPicking("edit")
+            }, h(Text, {
+                style: [
+                    S.browseTxt,
+                    {
+                        color: c("TEXT_LINK", "#00a8fc")
+                    }
+                ]
+            }, "😀  Browse server emojis")), h(Text, {
                 style: [
                     S.previewLabel,
                     {
@@ -827,7 +1089,8 @@
                 {
                     backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
                 }
-            ]
+            ],
+            contentContainerStyle: S.content
         }, h(View, {
             style: S.header
         }, h(Text, {
@@ -937,14 +1200,32 @@
             onChangeText: setNewEmojis,
             placeholder: "\uD83D\uDC4D \uD83D\uDD25 :blobcat:",
             placeholderTextColor: c("TEXT_MUTED", "#87898c")
-        }), h(Text, {
+        }), h(TouchableOpacity, {
             style: [
-                S.hint,
+                S.browseBtn,
                 {
-                    color: c("TEXT_MUTED", "#949ba4")
+                    backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"),
+                    marginTop: 8
+                }
+            ],
+            onPress: ()=>setPicking("new")
+        }, h(Text, {
+            style: [
+                S.browseTxt,
+                {
+                    color: c("TEXT_LINK", "#00a8fc")
                 }
             ]
-        }, "Server emojis: type :name:"), h(TouchableOpacity, {
+        }, "\uD83D\uDE00  Browse server emojis")), newEmojis.trim() ? h(View, {
+            style: {
+                flexDirection: "row",
+                flexWrap: "wrap",
+                marginTop: 10
+            }
+        }, parseEmojis(newEmojis).map((e, i)=>h(EmojiChip, {
+                key: i,
+                raw: e
+            }))) : null, h(TouchableOpacity, {
             style: [
                 S.primaryBtn,
                 {
@@ -1015,7 +1296,7 @@
                 }
             ]
         }, "Add a user above and pick the emojis you want dropped on their messages.")) : userKeys.map((uid)=>h(UserCard, {
-                key: uid + tick,
+                key: uid,
                 userId: uid,
                 onToggle: (u, v)=>{
                     getUsers()[u].enabled = v;
