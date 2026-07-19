@@ -22,6 +22,56 @@
     // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
     // server emojis entered as ":name:" (or a bare name).
     const EmojiCtx = findByProps("getDisambiguatedEmojiContext");
+    const EmojiStore = findByStoreName("EmojiStore");
+    // All usable custom emojis grouped by guild. Robust across platforms: on some
+    // Android builds getDisambiguatedEmojiContext().groupedCustomEmojis is null and
+    // emojisByName is empty, so prefer the raw EmojiStore (getGuilds +
+    // getUsableGuildEmoji) and fall back to the disambiguated context.
+    function allGuildEmojis() {
+        const out = [];
+        try {
+            var _store_getGuilds;
+            const store = EmojiStore;
+            const guilds = store === null || store === void 0 ? void 0 : (_store_getGuilds = store.getGuilds) === null || _store_getGuilds === void 0 ? void 0 : _store_getGuilds.call(store);
+            if (guilds) {
+                Object.keys(guilds).forEach((gid)=>{
+                    var _store_getUsableGuildEmoji, _store_getGuildEmoji;
+                    let emojis = store === null || store === void 0 ? void 0 : (_store_getUsableGuildEmoji = store.getUsableGuildEmoji) === null || _store_getUsableGuildEmoji === void 0 ? void 0 : _store_getUsableGuildEmoji.call(store, gid);
+                    if (!emojis || !emojis.length) emojis = store === null || store === void 0 ? void 0 : (_store_getGuildEmoji = store.getGuildEmoji) === null || _store_getGuildEmoji === void 0 ? void 0 : _store_getGuildEmoji.call(store, gid);
+                    emojis = (emojis || []).filter((e)=>e === null || e === void 0 ? void 0 : e.id);
+                    if (emojis.length) out.push({
+                        gid,
+                        emojis
+                    });
+                });
+            }
+        } catch  {}
+        if (out.length) return out;
+        try {
+            var _EmojiCtx_getDisambiguatedEmojiContext, _EmojiCtx_getDisambiguatedEmojiContext1;
+            const grouped = (EmojiCtx === null || EmojiCtx === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext1 = EmojiCtx.getDisambiguatedEmojiContext) === null || _EmojiCtx_getDisambiguatedEmojiContext1 === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext = _EmojiCtx_getDisambiguatedEmojiContext1.call(EmojiCtx)) === null || _EmojiCtx_getDisambiguatedEmojiContext === void 0 ? void 0 : _EmojiCtx_getDisambiguatedEmojiContext.groupedCustomEmojis) || {};
+            Object.keys(grouped).forEach((gid)=>{
+                const emojis = (grouped[gid] || []).filter((e)=>(e === null || e === void 0 ? void 0 : e.id) && e.available !== false);
+                if (emojis.length) out.push({
+                    gid,
+                    emojis
+                });
+            });
+        } catch  {}
+        return out;
+    }
+    // Lazy name -> emoji index (from allGuildEmojis) so shortcode resolution works
+    // even where emojisByName is empty (Android). First name wins on collisions.
+    let _emojiNameIndex = null;
+    function emojiNameIndex() {
+        if (_emojiNameIndex) return _emojiNameIndex;
+        const idx = {};
+        allGuildEmojis().forEach((g)=>g.emojis.forEach((e)=>{
+                if ((e === null || e === void 0 ? void 0 : e.name) && e.id && !idx[e.name]) idx[e.name] = e;
+            }));
+        _emojiNameIndex = idx;
+        return idx;
+    }
     // Resolve a custom-emoji shortcode ("blobcat" / ":blobcat:") to "name:id" for the
     // reaction API, or null if it isn't a known custom emoji on this account.
     function resolveCustom(name) {
@@ -29,18 +79,24 @@
         return full ? `${full.name}:${full.id}` : null;
     }
     // Same lookup but returns id + animated flag (for rendering the emoji image).
+    // Prefer the disambiguated context (handles same-named emojis); fall back to the
+    // EmojiStore-derived index where that context is unpopulated.
     function resolveCustomFull(name) {
         try {
-            var _EmojiCtx_getDisambiguatedEmojiContext, _ctx_emojisByName;
-            const ctx = EmojiCtx === null || EmojiCtx === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext = EmojiCtx.getDisambiguatedEmojiContext) === null || _EmojiCtx_getDisambiguatedEmojiContext === void 0 ? void 0 : _EmojiCtx_getDisambiguatedEmojiContext.call(EmojiCtx);
-            const e = ctx === null || ctx === void 0 ? void 0 : (_ctx_emojisByName = ctx.emojisByName) === null || _ctx_emojisByName === void 0 ? void 0 : _ctx_emojisByName[name];
+            var _EmojiCtx_getDisambiguatedEmojiContext_emojisByName, _EmojiCtx_getDisambiguatedEmojiContext, _EmojiCtx_getDisambiguatedEmojiContext1;
+            const e = EmojiCtx === null || EmojiCtx === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext1 = EmojiCtx.getDisambiguatedEmojiContext) === null || _EmojiCtx_getDisambiguatedEmojiContext1 === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext = _EmojiCtx_getDisambiguatedEmojiContext1.call(EmojiCtx)) === null || _EmojiCtx_getDisambiguatedEmojiContext === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext_emojisByName = _EmojiCtx_getDisambiguatedEmojiContext.emojisByName) === null || _EmojiCtx_getDisambiguatedEmojiContext_emojisByName === void 0 ? void 0 : _EmojiCtx_getDisambiguatedEmojiContext_emojisByName[name];
             if (e === null || e === void 0 ? void 0 : e.id) return {
                 name: e.name,
                 id: e.id,
                 animated: !!e.animated
             };
         } catch  {}
-        return null;
+        const e2 = emojiNameIndex()[name];
+        return e2 ? {
+            name: e2.name,
+            id: e2.id,
+            animated: !!e2.animated
+        } : null;
     }
     // window.vendetta.plugin is undefined at bundle scope (the plugin context is
     // only passed as the loader's arrow param, which this IIFE doesn't consume), so
@@ -621,20 +677,15 @@
     // Build [{ id, name, icon, emojis[] }] per guild from the emoji context, so the
     // picker can show each server and its custom emojis as images.
     function guildEmojiGroups() {
-        var _EmojiCtx_getDisambiguatedEmojiContext;
-        const ctx = EmojiCtx === null || EmojiCtx === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext = EmojiCtx.getDisambiguatedEmojiContext) === null || _EmojiCtx_getDisambiguatedEmojiContext === void 0 ? void 0 : _EmojiCtx_getDisambiguatedEmojiContext.call(EmojiCtx);
-        const grouped = (ctx === null || ctx === void 0 ? void 0 : ctx.groupedCustomEmojis) || {};
         const groups = [];
-        Object.keys(grouped).forEach((gid)=>{
+        allGuildEmojis().forEach((grp)=>{
             var _GuildStore_getGuild;
-            const emojis = (grouped[gid] || []).filter((e)=>(e === null || e === void 0 ? void 0 : e.id) && e.available !== false);
-            if (!emojis.length) return;
-            const guild = GuildStore === null || GuildStore === void 0 ? void 0 : (_GuildStore_getGuild = GuildStore.getGuild) === null || _GuildStore_getGuild === void 0 ? void 0 : _GuildStore_getGuild.call(GuildStore, gid);
+            const guild = GuildStore === null || GuildStore === void 0 ? void 0 : (_GuildStore_getGuild = GuildStore.getGuild) === null || _GuildStore_getGuild === void 0 ? void 0 : _GuildStore_getGuild.call(GuildStore, grp.gid);
             groups.push({
-                id: gid,
+                id: grp.gid,
                 name: (guild === null || guild === void 0 ? void 0 : guild.name) || "Unknown server",
                 icon: guild === null || guild === void 0 ? void 0 : guild.icon,
-                emojis
+                emojis: grp.emojis
             });
         });
         groups.sort((a, b)=>a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
