@@ -9,11 +9,12 @@
     const React = findByProps("createElement", "useState");
     const RN = findByProps("View", "Text", "StyleSheet");
     const { createElement: h, useState } = React;
-    const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableOpacity } = RN;
+    const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableOpacity, Image } = RN;
     const HTTP = findByProps("put", "del", "patch", "post", "get", "getAPIBaseURL");
     const TokenStore = findByStoreName("UserAuthTokenStore") || findByStoreName("AuthenticationStore");
     const FD = findByProps("_interceptors");
     const tokens = findByProps("unsafe_rawColors", "colors");
+    const UserStore = findByStoreName("UserStore");
     // Custom/server emoji lookup: getDisambiguatedEmojiContext().emojisByName maps a
     // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
     // server emojis entered as ":name:" (or a bare name).
@@ -21,11 +22,20 @@
     // Resolve a custom-emoji shortcode ("blobcat" / ":blobcat:") to "name:id" for the
     // reaction API, or null if it isn't a known custom emoji on this account.
     function resolveCustom(name) {
+        const full = resolveCustomFull(name);
+        return full ? `${full.name}:${full.id}` : null;
+    }
+    // Same lookup but returns id + animated flag (for rendering the emoji image).
+    function resolveCustomFull(name) {
         try {
             var _EmojiCtx_getDisambiguatedEmojiContext, _ctx_emojisByName;
             const ctx = EmojiCtx === null || EmojiCtx === void 0 ? void 0 : (_EmojiCtx_getDisambiguatedEmojiContext = EmojiCtx.getDisambiguatedEmojiContext) === null || _EmojiCtx_getDisambiguatedEmojiContext === void 0 ? void 0 : _EmojiCtx_getDisambiguatedEmojiContext.call(EmojiCtx);
             const e = ctx === null || ctx === void 0 ? void 0 : (_ctx_emojisByName = ctx.emojisByName) === null || _ctx_emojisByName === void 0 ? void 0 : _ctx_emojisByName[name];
-            if (e === null || e === void 0 ? void 0 : e.id) return `${e.name}:${e.id}`;
+            if (e === null || e === void 0 ? void 0 : e.id) return {
+                name: e.name,
+                id: e.id,
+                animated: !!e.animated
+            };
         } catch  {}
         return null;
     }
@@ -173,30 +183,117 @@
     const S = StyleSheet.create({
         container: {
             flex: 1,
-            padding: 16
+            padding: 14
+        },
+        header: {
+            marginTop: 4,
+            marginBottom: 4
+        },
+        title: {
+            fontSize: 22,
+            fontWeight: "800",
+            letterSpacing: 0.2
+        },
+        subtitle: {
+            fontSize: 13,
+            marginTop: 3,
+            lineHeight: 18
+        },
+        statRow: {
+            flexDirection: "row",
+            marginTop: 12
+        },
+        pill: {
+            flexDirection: "row",
+            alignItems: "center",
+            borderRadius: 20,
+            paddingHorizontal: 11,
+            paddingVertical: 6,
+            marginRight: 8
+        },
+        pillDot: {
+            width: 8,
+            height: 8,
+            borderRadius: 4,
+            marginRight: 7
+        },
+        pillTxt: {
+            fontSize: 12,
+            fontWeight: "700"
         },
         sectionTitle: {
             fontSize: 12,
-            fontWeight: "600",
+            fontWeight: "700",
             textTransform: "uppercase",
-            letterSpacing: 0.5,
-            marginBottom: 8,
-            marginTop: 16,
-            opacity: 0.6
+            letterSpacing: 0.6,
+            marginBottom: 10,
+            marginTop: 20,
+            opacity: 0.55
+        },
+        addToggle: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 12,
+            borderWidth: 1.5,
+            borderStyle: "dashed",
+            paddingVertical: 13,
+            marginTop: 14
+        },
+        addToggleTxt: {
+            fontSize: 14,
+            fontWeight: "700"
+        },
+        formCard: {
+            borderRadius: 14,
+            padding: 14,
+            borderWidth: 1,
+            marginTop: 12
+        },
+        fieldLabel: {
+            fontSize: 11,
+            fontWeight: "700",
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
+            marginBottom: 6,
+            marginTop: 10,
+            opacity: 0.55
+        },
+        input: {
+            borderRadius: 10,
+            paddingHorizontal: 12,
+            paddingVertical: 10,
+            fontSize: 15,
+            borderWidth: 1
+        },
+        hint: {
+            fontSize: 12,
+            opacity: 0.5,
+            marginTop: 6,
+            lineHeight: 16
         },
         card: {
-            borderRadius: 12,
-            marginBottom: 8,
-            padding: 12
+            borderRadius: 14,
+            marginBottom: 10,
+            padding: 13
         },
-        row: {
+        cardHead: {
             flexDirection: "row",
             alignItems: "center"
         },
-        label: {
-            fontSize: 15,
-            fontWeight: "600",
-            flex: 1
+        avatar: {
+            width: 42,
+            height: 42,
+            borderRadius: 21,
+            marginRight: 12
+        },
+        avatarFallback: {
+            alignItems: "center",
+            justifyContent: "center"
+        },
+        name: {
+            fontSize: 16,
+            fontWeight: "700"
         },
         uid: {
             fontSize: 11,
@@ -206,57 +303,173 @@
         emojiRow: {
             flexDirection: "row",
             flexWrap: "wrap",
-            marginTop: 6
+            marginTop: 12
         },
         chip: {
-            borderRadius: 8,
-            paddingHorizontal: 8,
-            paddingVertical: 4,
-            marginRight: 4,
-            marginBottom: 4
-        },
-        input: {
-            borderRadius: 8,
-            padding: 10,
-            fontSize: 14,
-            marginBottom: 8,
-            borderWidth: 1
-        },
-        btn: {
-            borderRadius: 8,
-            padding: 10,
+            flexDirection: "row",
             alignItems: "center",
-            marginTop: 4
-        },
-        btnTxt: {
-            fontSize: 14,
-            fontWeight: "600"
-        },
-        smBtn: {
-            borderRadius: 6,
-            paddingHorizontal: 8,
-            paddingVertical: 4,
-            marginLeft: 6
-        },
-        smTxt: {
-            fontSize: 12,
-            fontWeight: "600"
-        },
-        hint: {
-            fontSize: 11,
-            opacity: 0.45,
+            justifyContent: "center",
+            minWidth: 36,
+            height: 36,
+            borderRadius: 10,
+            paddingHorizontal: 7,
+            marginRight: 6,
             marginBottom: 6
         },
-        empty: {
-            textAlign: "center",
+        chipImg: {
+            width: 22,
+            height: 22
+        },
+        chipTxt: {
+            fontSize: 19
+        },
+        noEmoji: {
+            fontSize: 13,
             opacity: 0.4,
-            marginTop: 32,
-            fontSize: 15
+            marginTop: 12,
+            fontStyle: "italic"
+        },
+        actions: {
+            flexDirection: "row",
+            marginTop: 12
+        },
+        actBtn: {
+            flex: 1,
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 10,
+            paddingVertical: 10,
+            marginRight: 8
+        },
+        actTxt: {
+            fontSize: 13,
+            fontWeight: "700"
+        },
+        primaryBtn: {
+            borderRadius: 11,
+            paddingVertical: 13,
+            alignItems: "center",
+            marginTop: 14
+        },
+        primaryTxt: {
+            fontSize: 15,
+            fontWeight: "700"
+        },
+        ghostBtn: {
+            borderRadius: 11,
+            paddingVertical: 12,
+            alignItems: "center",
+            marginTop: 8
+        },
+        emptyWrap: {
+            alignItems: "center",
+            marginTop: 36,
+            paddingHorizontal: 24
+        },
+        emptyIcon: {
+            fontSize: 42,
+            marginBottom: 12
+        },
+        emptyTxt: {
+            fontSize: 15,
+            fontWeight: "700",
+            textAlign: "center"
+        },
+        emptySub: {
+            fontSize: 13,
+            opacity: 0.5,
+            textAlign: "center",
+            marginTop: 5,
+            lineHeight: 18
+        },
+        previewLabel: {
+            fontSize: 11,
+            fontWeight: "700",
+            textTransform: "uppercase",
+            letterSpacing: 0.4,
+            opacity: 0.55,
+            marginTop: 14,
+            marginBottom: 8
+        },
+        backTxt: {
+            fontSize: 15,
+            fontWeight: "700"
         }
     });
     function c(key, fallback) {
         var _tokens_colors;
         return (tokens === null || tokens === void 0 ? void 0 : (_tokens_colors = tokens.colors) === null || _tokens_colors === void 0 ? void 0 : _tokens_colors[key]) || fallback;
+    }
+    // How to render a stored emoji token in the UI: a custom-emoji CDN image, or text.
+    function emojiDisplay(raw) {
+        const t = raw.trim();
+        const m = /^<?(a)?:([^:>]+):(\d{15,})>?$/.exec(t);
+        if (m) return {
+            uri: `https://cdn.discordapp.com/emojis/${m[3]}.${m[1] === "a" ? "gif" : "png"}?size=48`
+        };
+        const sc = /^:?([a-zA-Z0-9_~]+):?$/.exec(t);
+        if (sc) {
+            const full = resolveCustomFull(sc[1]);
+            if (full) return {
+                uri: `https://cdn.discordapp.com/emojis/${full.id}.${full.animated ? "gif" : "png"}?size=48`
+            };
+        }
+        return {
+            text: t
+        };
+    }
+    function EmojiChip({ raw }) {
+        const d = emojiDisplay(raw);
+        return h(View, {
+            style: [
+                S.chip,
+                {
+                    backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
+                }
+            ]
+        }, d.uri ? h(Image, {
+            source: {
+                uri: d.uri
+            },
+            style: S.chipImg
+        }) : h(Text, {
+            style: S.chipTxt
+        }, d.text));
+    }
+    function avatarUri(userId) {
+        try {
+            var _UserStore_getUser;
+            const u = UserStore === null || UserStore === void 0 ? void 0 : (_UserStore_getUser = UserStore.getUser) === null || _UserStore_getUser === void 0 ? void 0 : _UserStore_getUser.call(UserStore, userId);
+            if (u === null || u === void 0 ? void 0 : u.getAvatarURL) return u.getAvatarURL(null, 128, true);
+            if (u === null || u === void 0 ? void 0 : u.avatar) return `https://cdn.discordapp.com/avatars/${userId}/${u.avatar}.png?size=128`;
+        } catch  {}
+        return null;
+    }
+    function Avatar({ userId, label }) {
+        const uri = avatarUri(userId);
+        if (uri) return h(Image, {
+            source: {
+                uri
+            },
+            style: S.avatar
+        });
+        const initial = ((label || "?").trim().charAt(0) || "?").toUpperCase();
+        return h(View, {
+            style: [
+                S.avatar,
+                S.avatarFallback,
+                {
+                    backgroundColor: c("BRAND_500", "#5865f2")
+                }
+            ]
+        }, h(Text, {
+            style: {
+                color: "#fff",
+                fontWeight: "800",
+                fontSize: 17
+            }
+        }, initial));
     }
     // Split a settings text field into individual emojis. There's no Intl.Segmenter
     // on this build, and the OS emoji keyboard inserts emojis with no separators, so
@@ -282,6 +495,7 @@
     function UserCard({ userId, onToggle, onDelete, onEdit }) {
         var _cfg_emojis;
         const cfg = getUsers()[userId];
+        const on = !!cfg.enabled;
         return h(View, {
             style: [
                 S.card,
@@ -290,89 +504,98 @@
                 }
             ]
         }, h(View, {
-            style: S.row
+            style: S.cardHead
         }, h(View, {
             style: {
-                flex: 1
+                opacity: on ? 1 : 0.4
+            }
+        }, h(Avatar, {
+            userId,
+            label: cfg.label
+        })), h(View, {
+            style: {
+                flex: 1,
+                opacity: on ? 1 : 0.4
             }
         }, h(Text, {
             style: [
-                S.label,
+                S.name,
                 {
-                    color: c("TEXT_NORMAL", "#fff")
+                    color: c("HEADER_PRIMARY", "#fff")
                 }
             ]
         }, cfg.label || userId), h(Text, {
             style: [
                 S.uid,
                 {
-                    color: c("TEXT_MUTED", "#aaa")
+                    color: c("TEXT_MUTED", "#949ba4")
                 }
             ]
         }, "ID: " + userId)), h(Switch, {
-            value: cfg.enabled,
+            value: on,
             onValueChange: (v)=>onToggle(userId, v),
             trackColor: {
-                true: c("BRAND_NEW", "#5865f2")
+                true: c("BRAND_500", "#5865f2"),
+                false: c("BACKGROUND_TERTIARY", "#1e1f22")
             }
-        }), h(TouchableOpacity, {
+        })), h(View, {
             style: [
-                S.smBtn,
+                S.emojiRow,
                 {
-                    backgroundColor: c("STATUS_DANGER", "#ed4245")
-                }
-            ],
-            onPress: ()=>onDelete(userId)
-        }, h(Text, {
-            style: [
-                S.smTxt,
-                {
-                    color: "#fff"
+                    opacity: on ? 1 : 0.4
                 }
             ]
-        }, "\u2715"))), h(View, {
-            style: S.emojiRow
-        }, ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0 ? cfg.emojis.map((e, i)=>h(View, {
+        }, ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0 ? cfg.emojis.map((e, i)=>h(EmojiChip, {
                 key: i,
-                style: [
-                    S.chip,
-                    {
-                        backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
-                    }
-                ]
-            }, h(Text, {
-                style: {
-                    fontSize: 18
-                }
-            }, e))) : h(Text, {
+                raw: e
+            })) : h(Text, {
             style: [
-                S.hint,
+                S.noEmoji,
                 {
-                    color: c("TEXT_MUTED", "#aaa")
+                    color: c("TEXT_MUTED", "#949ba4")
                 }
             ]
-        }, "No emojis")), h(TouchableOpacity, {
+        }, "No emojis set")), h(View, {
+            style: S.actions
+        }, h(TouchableOpacity, {
             style: [
-                S.smBtn,
+                S.actBtn,
                 {
-                    backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"),
-                    marginTop: 6,
-                    alignSelf: "flex-start"
+                    backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
                 }
             ],
             onPress: ()=>onEdit(userId)
         }, h(Text, {
             style: [
-                S.smTxt,
+                S.actTxt,
                 {
-                    color: c("TEXT_NORMAL", "#fff")
+                    color: c("TEXT_NORMAL", "#dbdee1")
                 }
             ]
-        }, "Edit Emojis")));
+        }, "\u270E  Edit emojis")), h(TouchableOpacity, {
+            style: [
+                S.actBtn,
+                {
+                    backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22"),
+                    marginRight: 0,
+                    flex: 0,
+                    paddingHorizontal: 16
+                }
+            ],
+            onPress: ()=>onDelete(userId)
+        }, h(Text, {
+            style: [
+                S.actTxt,
+                {
+                    color: c("TEXT_DANGER", "#f23f43")
+                }
+            ]
+        }, "Remove"))));
     }
     function Settings() {
         const [tick, setTick] = useState(0);
         const refresh = ()=>setTick((n)=>n + 1);
+        const [adding, setAdding] = useState(false);
         const [newId, setNewId] = useState("");
         const [newLabel, setNewLabel] = useState("");
         const [newEmojis, setNewEmojis] = useState("");
@@ -382,27 +605,27 @@
             S.input,
             {
                 color: c("TEXT_NORMAL", "#fff"),
-                backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31"),
-                borderColor: c("BACKGROUND_TERTIARY", "#1e1f22")
+                backgroundColor: c("INPUT_BACKGROUND", "#1e1f22"),
+                borderColor: c("BORDER_SUBTLE", "#3f4147")
             }
         ];
         function handleAdd() {
             const uid = newId.trim();
             if (!uid) return;
-            const emojiList = parseEmojis(newEmojis);
             getUsers()[uid] = {
                 label: newLabel.trim() || uid,
-                emojis: emojiList,
+                emojis: parseEmojis(newEmojis),
                 enabled: true
             };
             setNewId("");
             setNewLabel("");
             setNewEmojis("");
+            setAdding(false);
             refresh();
         }
         function handleDelete(uid) {
             var _getUsers_uid;
-            Alert.alert("Remove User", `Remove ${((_getUsers_uid = getUsers()[uid]) === null || _getUsers_uid === void 0 ? void 0 : _getUsers_uid.label) || uid}?`, [
+            Alert.alert("Remove user", `Stop auto-reacting to ${((_getUsers_uid = getUsers()[uid]) === null || _getUsers_uid === void 0 ? void 0 : _getUsers_uid.label) || uid}?`, [
                 {
                     text: "Cancel",
                     style: "cancel"
@@ -428,7 +651,9 @@
             setEditTarget(null);
             refresh();
         }
+        // ----- Edit emojis screen (with live preview) -----
         if (editTarget && getUsers()[editTarget]) {
+            const preview = parseEmojis(editInput);
             return h(ScrollView, {
                 style: [
                     S.container,
@@ -436,61 +661,107 @@
                         backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
                     }
                 ]
+            }, h(TouchableOpacity, {
+                style: {
+                    marginTop: 4,
+                    marginBottom: 6
+                },
+                onPress: ()=>setEditTarget(null)
             }, h(Text, {
                 style: [
-                    S.sectionTitle,
+                    S.backTxt,
                     {
-                        color: c("TEXT_NORMAL", "#fff")
+                        color: c("TEXT_LINK", "#00a8fc")
                     }
                 ]
-            }, `Emojis for ${getUsers()[editTarget].label || editTarget}`), h(Text, {
+            }, "\u2039  Back")), h(Text, {
                 style: [
-                    S.hint,
+                    S.title,
                     {
-                        color: c("TEXT_MUTED", "#aaa")
+                        color: c("HEADER_PRIMARY", "#fff"),
+                        fontSize: 19
                     }
                 ]
-            }, "Emojis and/or server emojis as :name:"), h(TextInput, {
-                style: inputStyle,
+            }, getUsers()[editTarget].label || editTarget), h(Text, {
+                style: [
+                    S.subtitle,
+                    {
+                        color: c("TEXT_MUTED", "#949ba4")
+                    }
+                ]
+            }, "Reactions added to their messages"), h(Text, {
+                style: [
+                    S.fieldLabel,
+                    {
+                        color: c("TEXT_NORMAL", "#dbdee1"),
+                        marginTop: 18
+                    }
+                ]
+            }, "Emojis"), h(TextInput, {
+                style: [
+                    inputStyle,
+                    {
+                        minHeight: 52
+                    }
+                ],
                 value: editInput,
                 onChangeText: setEditInput,
                 placeholder: "\uD83D\uDC4D \uD83D\uDD25 :blobcat:",
-                placeholderTextColor: c("TEXT_MUTED", "#aaa"),
+                placeholderTextColor: c("TEXT_MUTED", "#87898c"),
                 multiline: true
-            }), h(TouchableOpacity, {
+            }), h(Text, {
                 style: [
-                    S.btn,
+                    S.hint,
                     {
-                        backgroundColor: c("BRAND_NEW", "#5865f2")
+                        color: c("TEXT_MUTED", "#949ba4")
+                    }
+                ]
+            }, "Separate with spaces. Server emojis: type :name: (Nitro needed for other servers)."), h(Text, {
+                style: [
+                    S.previewLabel,
+                    {
+                        color: c("TEXT_NORMAL", "#dbdee1")
+                    }
+                ]
+            }, `Preview (${preview.length})`), preview.length > 0 ? h(View, {
+                style: {
+                    flexDirection: "row",
+                    flexWrap: "wrap"
+                }
+            }, preview.map((e, i)=>h(EmojiChip, {
+                    key: i,
+                    raw: e
+                }))) : h(Text, {
+                style: [
+                    S.noEmoji,
+                    {
+                        color: c("TEXT_MUTED", "#949ba4"),
+                        marginTop: 0
+                    }
+                ]
+            }, "Nothing yet"), h(TouchableOpacity, {
+                style: [
+                    S.primaryBtn,
+                    {
+                        backgroundColor: c("BRAND_500", "#5865f2")
                     }
                 ],
                 onPress: handleSaveEmojis
             }, h(Text, {
                 style: [
-                    S.btnTxt,
+                    S.primaryTxt,
                     {
                         color: "#fff"
                     }
                 ]
-            }, "Save")), h(TouchableOpacity, {
-                style: [
-                    S.btn,
-                    {
-                        backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31"),
-                        marginTop: 8
-                    }
-                ],
-                onPress: ()=>setEditTarget(null)
-            }, h(Text, {
-                style: [
-                    S.btnTxt,
-                    {
-                        color: c("TEXT_NORMAL", "#fff")
-                    }
-                ]
-            }, "Cancel")));
+            }, "Save")));
         }
+        // ----- Main screen -----
         const userKeys = Object.keys(getUsers());
+        const activeCount = userKeys.filter((u)=>{
+            var _getUsers_u;
+            return (_getUsers_u = getUsers()[u]) === null || _getUsers_u === void 0 ? void 0 : _getUsers_u.enabled;
+        }).length;
         return h(ScrollView, {
             style: [
                 S.container,
@@ -498,18 +769,80 @@
                     backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
                 }
             ]
+        }, h(View, {
+            style: S.header
         }, h(Text, {
             style: [
-                S.sectionTitle,
+                S.title,
                 {
-                    color: c("TEXT_NORMAL", "#fff")
+                    color: c("HEADER_PRIMARY", "#fff")
                 }
             ]
-        }, "Add User"), h(Text, {
+        }, "AutoReact"), h(Text, {
             style: [
-                S.hint,
+                S.subtitle,
                 {
-                    color: c("TEXT_MUTED", "#aaa")
+                    color: c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }, "Automatically react to messages from the users you watch."), h(View, {
+            style: S.statRow
+        }, h(View, {
+            style: [
+                S.pill,
+                {
+                    backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31")
+                }
+            ]
+        }, h(View, {
+            style: [
+                S.pillDot,
+                {
+                    backgroundColor: c("BRAND_500", "#5865f2")
+                }
+            ]
+        }), h(Text, {
+            style: [
+                S.pillTxt,
+                {
+                    color: c("TEXT_NORMAL", "#dbdee1")
+                }
+            ]
+        }, `${userKeys.length} watched`)), h(View, {
+            style: [
+                S.pill,
+                {
+                    backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31")
+                }
+            ]
+        }, h(View, {
+            style: [
+                S.pillDot,
+                {
+                    backgroundColor: activeCount > 0 ? c("STATUS_GREEN_500", "#23a55a") : c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }), h(Text, {
+            style: [
+                S.pillTxt,
+                {
+                    color: c("TEXT_NORMAL", "#dbdee1")
+                }
+            ]
+        }, `${activeCount} active`)))), adding ? h(View, {
+            style: [
+                S.formCard,
+                {
+                    backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31"),
+                    borderColor: c("BORDER_SUBTLE", "#3f4147")
+                }
+            ]
+        }, h(Text, {
+            style: [
+                S.fieldLabel,
+                {
+                    color: c("TEXT_NORMAL", "#dbdee1"),
+                    marginTop: 0
                 }
             ]
         }, "Display name (optional)"), h(TextInput, {
@@ -517,12 +850,12 @@
             value: newLabel,
             onChangeText: setNewLabel,
             placeholder: "John Doe",
-            placeholderTextColor: c("TEXT_MUTED", "#aaa")
+            placeholderTextColor: c("TEXT_MUTED", "#87898c")
         }), h(Text, {
             style: [
-                S.hint,
+                S.fieldLabel,
                 {
-                    color: c("TEXT_MUTED", "#aaa")
+                    color: c("TEXT_NORMAL", "#dbdee1")
                 }
             ]
         }, "User ID"), h(TextInput, {
@@ -530,52 +863,99 @@
             value: newId,
             onChangeText: setNewId,
             placeholder: "123456789012345678",
-            placeholderTextColor: c("TEXT_MUTED", "#aaa"),
+            placeholderTextColor: c("TEXT_MUTED", "#87898c"),
             keyboardType: "numeric"
         }), h(Text, {
             style: [
-                S.hint,
+                S.fieldLabel,
                 {
-                    color: c("TEXT_MUTED", "#aaa")
+                    color: c("TEXT_NORMAL", "#dbdee1")
                 }
             ]
-        }, "Emojis (server emojis as :name:)"), h(TextInput, {
+        }, "Emojis"), h(TextInput, {
             style: inputStyle,
             value: newEmojis,
             onChangeText: setNewEmojis,
             placeholder: "\uD83D\uDC4D \uD83D\uDD25 :blobcat:",
-            placeholderTextColor: c("TEXT_MUTED", "#aaa")
-        }), h(TouchableOpacity, {
+            placeholderTextColor: c("TEXT_MUTED", "#87898c")
+        }), h(Text, {
             style: [
-                S.btn,
+                S.hint,
                 {
-                    backgroundColor: newId.trim() ? c("BRAND_NEW", "#5865f2") : c("BACKGROUND_TERTIARY", "#1e1f22")
+                    color: c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }, "Server emojis: type :name:"), h(TouchableOpacity, {
+            style: [
+                S.primaryBtn,
+                {
+                    backgroundColor: newId.trim() ? c("BRAND_500", "#5865f2") : c("BACKGROUND_TERTIARY", "#1e1f22")
                 }
             ],
             onPress: handleAdd
         }, h(Text, {
             style: [
-                S.btnTxt,
+                S.primaryTxt,
                 {
-                    color: newId.trim() ? "#fff" : c("TEXT_MUTED", "#aaa")
+                    color: newId.trim() ? "#fff" : c("TEXT_MUTED", "#949ba4")
                 }
             ]
-        }, "Add User")), h(Text, {
+        }, "Add user")), h(TouchableOpacity, {
+            style: S.ghostBtn,
+            onPress: ()=>{
+                setAdding(false);
+                setNewId("");
+                setNewLabel("");
+                setNewEmojis("");
+            }
+        }, h(Text, {
+            style: [
+                S.primaryTxt,
+                {
+                    color: c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }, "Cancel"))) : h(TouchableOpacity, {
+            style: [
+                S.addToggle,
+                {
+                    borderColor: c("BRAND_500", "#5865f2")
+                }
+            ],
+            onPress: ()=>setAdding(true)
+        }, h(Text, {
+            style: [
+                S.addToggleTxt,
+                {
+                    color: c("BRAND_500", "#5865f2")
+                }
+            ]
+        }, "\uFF0B  Add a user")), h(Text, {
             style: [
                 S.sectionTitle,
                 {
-                    color: c("TEXT_NORMAL", "#fff"),
-                    marginTop: 24
+                    color: c("TEXT_NORMAL", "#fff")
                 }
             ]
-        }, `Watched Users (${userKeys.length})`), userKeys.length === 0 ? h(Text, {
+        }, "Watched users"), userKeys.length === 0 ? h(View, {
+            style: S.emptyWrap
+        }, h(Text, {
+            style: S.emptyIcon
+        }, "\uD83D\uDC40"), h(Text, {
             style: [
-                S.empty,
+                S.emptyTxt,
                 {
-                    color: c("TEXT_MUTED", "#aaa")
+                    color: c("TEXT_NORMAL", "#dbdee1")
                 }
             ]
-        }, "No users added yet") : userKeys.map((uid)=>h(UserCard, {
+        }, "No one watched yet"), h(Text, {
+            style: [
+                S.emptySub,
+                {
+                    color: c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }, "Add a user above and pick the emojis you want dropped on their messages.")) : userKeys.map((uid)=>h(UserCard, {
                 key: uid + tick,
                 userId: uid,
                 onToggle: (u, v)=>{
