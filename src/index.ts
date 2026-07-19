@@ -16,10 +16,17 @@ const tokens = findByProps("unsafe_rawColors", "colors");
 // window.vendetta.plugin is undefined at bundle scope (the plugin context is
 // only passed as the loader's arrow param, which this IIFE doesn't consume), so
 // create our own MMKV-backed storage instead of reading vd.plugin.storage.
-// storage.users: { [userId]: { label: string, emojis: string[], enabled: boolean } }
+// users map: { [userId]: { label: string, emojis: string[], enabled: boolean } }
 const { createStorage, wrapSync, createMMKVBackend } = vd.storage;
 const storage: Record<string, any> = wrapSync(createStorage(createMMKVBackend("AutoReact")));
-if (!storage.users) storage.users = {};
+
+// wrapSync storage hydrates asynchronously, so getUsers() can be undefined at
+// first read/render. Always go through this to guarantee it exists (bracket
+// access here is intentional so it isn't rewritten to a recursive call).
+function getUsers(): Record<string, any> {
+    if (!storage["users"]) storage["users"] = {};
+    return storage["users"];
+}
 
 let interceptFn: ((p: any) => any) | null = null;
 
@@ -146,7 +153,7 @@ function c(key: string, fallback: string): string {
 }
 
 function UserCard({ userId, onToggle, onDelete, onEdit }: any) {
-    const cfg = storage.users[userId];
+    const cfg = getUsers()[userId];
     return h(View, { style: [S.card, { backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31") }] },
         h(View, { style: S.row },
             h(View, { style: { flex: 1 } },
@@ -198,34 +205,34 @@ function Settings() {
         const uid = newId.trim();
         if (!uid) return;
         const emojiList = newEmojis.trim().split(/[\s,]+/).filter(Boolean);
-        storage.users[uid] = { label: newLabel.trim() || uid, emojis: emojiList, enabled: true };
+        getUsers()[uid] = { label: newLabel.trim() || uid, emojis: emojiList, enabled: true };
         setNewId(""); setNewLabel(""); setNewEmojis("");
         refresh();
     }
 
     function handleDelete(uid: string) {
-        Alert.alert("Remove User", `Remove ${storage.users[uid]?.label || uid}?`, [
+        Alert.alert("Remove User", `Remove ${getUsers()[uid]?.label || uid}?`, [
             { text: "Cancel", style: "cancel" },
-            { text: "Remove", style: "destructive", onPress: () => { delete storage.users[uid]; refresh(); } },
+            { text: "Remove", style: "destructive", onPress: () => { delete getUsers()[uid]; refresh(); } },
         ]);
     }
 
     function handleEdit(uid: string) {
         setEditTarget(uid);
-        setEditInput((storage.users[uid]?.emojis || []).join(" "));
+        setEditInput((getUsers()[uid]?.emojis || []).join(" "));
     }
 
     function handleSaveEmojis() {
         if (!editTarget) return;
-        storage.users[editTarget].emojis = editInput.trim().split(/[\s,]+/).filter(Boolean);
+        getUsers()[editTarget].emojis = editInput.trim().split(/[\s,]+/).filter(Boolean);
         setEditTarget(null);
         refresh();
     }
 
-    if (editTarget && storage.users[editTarget]) {
+    if (editTarget && getUsers()[editTarget]) {
         return h(ScrollView, { style: [S.container, { backgroundColor: c("BACKGROUND_PRIMARY", "#313338") }] },
             h(Text, { style: [S.sectionTitle, { color: c("TEXT_NORMAL", "#fff") }] },
-                `Emojis for ${storage.users[editTarget].label || editTarget}`),
+                `Emojis for ${getUsers()[editTarget].label || editTarget}`),
             h(Text, { style: [S.hint, { color: c("TEXT_MUTED", "#aaa") }] }, "Space or comma separated"),
             h(TextInput, {
                 style: inputStyle, value: editInput, onChangeText: setEditInput,
@@ -241,7 +248,7 @@ function Settings() {
         );
     }
 
-    const userKeys = Object.keys(storage.users);
+    const userKeys = Object.keys(getUsers());
 
     return h(ScrollView, { style: [S.container, { backgroundColor: c("BACKGROUND_PRIMARY", "#313338") }] },
         h(Text, { style: [S.sectionTitle, { color: c("TEXT_NORMAL", "#fff") }] }, "Add User"),
@@ -260,7 +267,7 @@ function Settings() {
             `Watched Users (${userKeys.length})`),
         userKeys.length === 0
             ? h(Text, { style: [S.empty, { color: c("TEXT_MUTED", "#aaa") }] }, "No users added yet")
-            : userKeys.map((uid) => h(UserCard, { key: uid + tick, userId: uid, onToggle: (u: string, v: boolean) => { storage.users[u].enabled = v; refresh(); }, onDelete: handleDelete, onEdit: handleEdit })),
+            : userKeys.map((uid) => h(UserCard, { key: uid + tick, userId: uid, onToggle: (u: string, v: boolean) => { getUsers()[u].enabled = v; refresh(); }, onDelete: handleDelete, onEdit: handleEdit })),
     );
 }
 
@@ -270,7 +277,7 @@ export default {
             if (payload.type !== "MESSAGE_CREATE" || payload.optimistic) return null;
             const authorId = payload.message?.author?.id;
             if (!authorId) return null;
-            const cfg = storage.users[authorId];
+            const cfg = getUsers()[authorId];
             if (cfg?.enabled && cfg.emojis?.length > 0) {
                 reactToMessage(payload.channelId, payload.message.id, cfg.emojis);
             }
