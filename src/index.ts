@@ -299,18 +299,26 @@ function EmojiChip({ raw }: any) {
             : h(Text, { style: S.chipTxt }, d.text));
 }
 
-function avatarUri(userId: string): string | null {
+// RN Image `source` for a user's avatar. getAvatarURL returns a STRING URL for
+// users with a custom avatar, but a NUMBER (a local RN asset id for Discord's
+// default avatar) for users without one — so return {uri} for the former and the
+// number as-is for the latter. null => user not cached => caller shows initial.
+function avatarSource(userId: string): any {
     try {
         const u = (UserStore as any)?.getUser?.(userId);
-        if (u?.getAvatarURL) return u.getAvatarURL(null, 128, true);
-        if (u?.avatar) return `https://cdn.discordapp.com/avatars/${userId}/${u.avatar}.png?size=128`;
+        if (u?.getAvatarURL) {
+            const r = u.getAvatarURL(null, 128, true);
+            if (typeof r === "string" && r) return { uri: r };
+            if (typeof r === "number") return r;
+        }
+        if (u?.avatar) return { uri: `https://cdn.discordapp.com/avatars/${userId}/${u.avatar}.png?size=128` };
     } catch { /* not cached */ }
     return null;
 }
 
 function Avatar({ userId, label }: any) {
-    const uri = avatarUri(userId);
-    if (uri) return h(Image, { source: { uri }, style: S.avatar });
+    const src = avatarSource(userId);
+    if (src != null) return h(Image, { source: src, style: S.avatar });
     const initial = ((label || "?").trim().charAt(0) || "?").toUpperCase();
     return h(View, { style: [S.avatar, S.avatarFallback, { backgroundColor: c("BRAND_500", "#5865f2") }] },
         h(Text, { style: { color: "#fff", fontWeight: "800", fontSize: 17 } }, initial));
