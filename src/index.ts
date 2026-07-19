@@ -20,6 +20,49 @@ const GuildStore = findByStoreName("GuildStore");
 // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
 // server emojis entered as ":name:" (or a bare name).
 const EmojiCtx = findByProps("getDisambiguatedEmojiContext");
+const EmojiStore = findByStoreName("EmojiStore");
+
+// All usable custom emojis grouped by guild. Robust across platforms: on some
+// Android builds getDisambiguatedEmojiContext().groupedCustomEmojis is null and
+// emojisByName is empty, so prefer the raw EmojiStore (getGuilds +
+// getUsableGuildEmoji) and fall back to the disambiguated context.
+function allGuildEmojis(): { gid: string; emojis: any[] }[] {
+    const out: { gid: string; emojis: any[] }[] = [];
+    try {
+        const store = EmojiStore as any;
+        const guilds = store?.getGuilds?.();
+        if (guilds) {
+            Object.keys(guilds).forEach((gid) => {
+                let emojis = store?.getUsableGuildEmoji?.(gid);
+                if (!emojis || !emojis.length) emojis = store?.getGuildEmoji?.(gid);
+                emojis = (emojis || []).filter((e: any) => e?.id);
+                if (emojis.length) out.push({ gid, emojis });
+            });
+        }
+    } catch { /* ignore */ }
+    if (out.length) return out;
+    try {
+        const grouped = (EmojiCtx as any)?.getDisambiguatedEmojiContext?.()?.groupedCustomEmojis || {};
+        Object.keys(grouped).forEach((gid) => {
+            const emojis = (grouped[gid] || []).filter((e: any) => e?.id && e.available !== false);
+            if (emojis.length) out.push({ gid, emojis });
+        });
+    } catch { /* ignore */ }
+    return out;
+}
+
+// Lazy name -> emoji index (from allGuildEmojis) so shortcode resolution works
+// even where emojisByName is empty (Android). First name wins on collisions.
+let _emojiNameIndex: Record<string, any> | null = null;
+function emojiNameIndex(): Record<string, any> {
+    if (_emojiNameIndex) return _emojiNameIndex;
+    const idx: Record<string, any> = {};
+    allGuildEmojis().forEach((g) => g.emojis.forEach((e: any) => {
+        if (e?.name && e.id && !idx[e.name]) idx[e.name] = e;
+    }));
+    _emojiNameIndex = idx;
+    return idx;
+}
 
 // Resolve a custom-emoji shortcode ("blobcat" / ":blobcat:") to "name:id" for the
 // reaction API, or null if it isn't a known custom emoji on this account.
@@ -29,13 +72,15 @@ function resolveCustom(name: string): string | null {
 }
 
 // Same lookup but returns id + animated flag (for rendering the emoji image).
+// Prefer the disambiguated context (handles same-named emojis); fall back to the
+// EmojiStore-derived index where that context is unpopulated.
 function resolveCustomFull(name: string): { name: string; id: string; animated: boolean } | null {
     try {
-        const ctx = (EmojiCtx as any)?.getDisambiguatedEmojiContext?.();
-        const e = ctx?.emojisByName?.[name];
+        const e = (EmojiCtx as any)?.getDisambiguatedEmojiContext?.()?.emojisByName?.[name];
         if (e?.id) return { name: e.name, id: e.id, animated: !!e.animated };
-    } catch { /* store not ready — treat as unresolved */ }
-    return null;
+    } catch { /* fall through */ }
+    const e2 = emojiNameIndex()[name];
+    return e2 ? { name: e2.name, id: e2.id, animated: !!e2.animated } : null;
 }
 
 // window.vendetta.plugin is undefined at bundle scope (the plugin context is
@@ -375,14 +420,10 @@ function customEmojiUrl(id: string, animated: boolean): string {
 // Build [{ id, name, icon, emojis[] }] per guild from the emoji context, so the
 // picker can show each server and its custom emojis as images.
 function guildEmojiGroups(): any[] {
-    const ctx = (EmojiCtx as any)?.getDisambiguatedEmojiContext?.();
-    const grouped = ctx?.groupedCustomEmojis || {};
     const groups: any[] = [];
-    Object.keys(grouped).forEach((gid) => {
-        const emojis = (grouped[gid] || []).filter((e: any) => e?.id && e.available !== false);
-        if (!emojis.length) return;
-        const guild = (GuildStore as any)?.getGuild?.(gid);
-        groups.push({ id: gid, name: guild?.name || "Unknown server", icon: guild?.icon, emojis });
+    allGuildEmojis().forEach((grp) => {
+        const guild = (GuildStore as any)?.getGuild?.(grp.gid);
+        groups.push({ id: grp.gid, name: guild?.name || "Unknown server", icon: guild?.icon, emojis: grp.emojis });
     });
     groups.sort((a, b) => (a.name < b.name ? -1 : a.name > b.name ? 1 : 0));
     return groups;
