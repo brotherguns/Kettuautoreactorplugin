@@ -1,9 +1,10 @@
 const vd = window.vendetta;
 const { findByProps, findByStoreName } = vd.metro;
-const { React, ReactNative: RN } = vd.ui.assets ? vd : {
-    React: findByProps("createElement", "useState"),
-    ReactNative: findByProps("View", "Text", "StyleSheet"),
-};
+// window.vendetta does not expose React/ReactNative directly on this build
+// (vd.React is undefined even though vd.ui.assets exists), so always resolve
+// them through the metro module registry.
+const React = findByProps("createElement", "useState");
+const RN = findByProps("View", "Text", "StyleSheet");
 const { createElement: h, useState } = React;
 const { View, Text, TextInput, ScrollView, Switch, StyleSheet, Alert, TouchableOpacity } = RN;
 
@@ -12,8 +13,12 @@ const TokenStore = findByStoreName("UserAuthTokenStore") || findByStoreName("Aut
 const FD = findByProps("_interceptors");
 const tokens = findByProps("unsafe_rawColors", "colors");
 
+// window.vendetta.plugin is undefined at bundle scope (the plugin context is
+// only passed as the loader's arrow param, which this IIFE doesn't consume), so
+// create our own MMKV-backed storage instead of reading vd.plugin.storage.
 // storage.users: { [userId]: { label: string, emojis: string[], enabled: boolean } }
-const storage: Record<string, any> = vd.plugin.storage;
+const { createStorage, wrapSync, createMMKVBackend } = vd.storage;
+const storage: Record<string, any> = wrapSync(createStorage(createMMKVBackend("AutoReact")));
 if (!storage.users) storage.users = {};
 
 let interceptFn: ((p: any) => any) | null = null;
