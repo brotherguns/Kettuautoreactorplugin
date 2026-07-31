@@ -18,6 +18,8 @@
     const UserStore = findByStoreName("UserStore");
     const ThemeStore = findByStoreName("ThemeStore");
     const GuildStore = findByStoreName("GuildStore");
+    const ChannelStore = findByStoreName("ChannelStore");
+    const GuildChannelStore = findByStoreName("GuildChannelStore");
     // Custom/server emoji lookup: getDisambiguatedEmojiContext().emojisByName maps a
     // (disambiguated) shortcode name -> { name, id, animated }, letting us react with
     // server emojis entered as ":name:" (or a bare name).
@@ -110,6 +112,15 @@
     function getUsers() {
         if (!storage["users"]) storage["users"] = {};
         return storage["users"];
+    }
+    function getBlacklist() {
+        if (!storage["blacklist"]) storage["blacklist"] = {
+            servers: [],
+            channels: []
+        };
+        if (!storage["blacklist"].servers) storage["blacklist"].servers = [];
+        if (!storage["blacklist"].channels) storage["blacklist"].channels = [];
+        return storage["blacklist"];
     }
     let interceptFn = null;
     function getToken() {
@@ -278,6 +289,58 @@
             chain = chain.then(()=>applyOne(channelId, msgId, emoji, failed));
         });
         chain.then(()=>delay(VERIFY_DELAY_MS)).then(()=>verifyAndFix(channelId, msgId, emojis, 0, failed)).catch(()=>{});
+    }
+    // Text channels (type 0) for a guild, sorted by position.
+    function getGuildTextChannels(guildId) {
+        try {
+            var _GuildChannelStore_getChannels;
+            const chans = GuildChannelStore === null || GuildChannelStore === void 0 ? void 0 : (_GuildChannelStore_getChannels = GuildChannelStore.getChannels) === null || _GuildChannelStore_getChannels === void 0 ? void 0 : _GuildChannelStore_getChannels.call(GuildChannelStore, guildId);
+            if (!chans) return [];
+            // Vendetta/Discord internal: getChannels returns GuildChannels with SELECTABLE array
+            if (Array.isArray(chans.SELECTABLE)) {
+                return chans.SELECTABLE.filter((c)=>c && c.channel && c.channel.type === 0).map((c)=>c.channel).sort((a, b)=>(a.position || 0) - (b.position || 0));
+            }
+            // Fallback: plain object of id->channel
+            return Object.values(chans).filter((ch)=>ch && typeof ch === "object" && ch.type === 0).sort((a, b)=>(a.position || 0) - (b.position || 0));
+        } catch  {
+            return [];
+        }
+    }
+    function channelInfo(channelId) {
+        try {
+            var _ChannelStore_getChannel, _GuildStore_getGuild;
+            const ch = ChannelStore === null || ChannelStore === void 0 ? void 0 : (_ChannelStore_getChannel = ChannelStore.getChannel) === null || _ChannelStore_getChannel === void 0 ? void 0 : _ChannelStore_getChannel.call(ChannelStore, channelId);
+            const guildId = (ch === null || ch === void 0 ? void 0 : ch.guild_id) || null;
+            const g = guildId ? GuildStore === null || GuildStore === void 0 ? void 0 : (_GuildStore_getGuild = GuildStore.getGuild) === null || _GuildStore_getGuild === void 0 ? void 0 : _GuildStore_getGuild.call(GuildStore, guildId) : null;
+            return {
+                name: (ch === null || ch === void 0 ? void 0 : ch.name) || channelId,
+                guildId,
+                guildName: (g === null || g === void 0 ? void 0 : g.name) || guildId || "",
+                guildIcon: (g === null || g === void 0 ? void 0 : g.icon) || null
+            };
+        } catch  {
+            return {
+                name: channelId,
+                guildId: null,
+                guildName: "",
+                guildIcon: null
+            };
+        }
+    }
+    function guildInfo(guildId) {
+        try {
+            var _GuildStore_getGuild;
+            const g = GuildStore === null || GuildStore === void 0 ? void 0 : (_GuildStore_getGuild = GuildStore.getGuild) === null || _GuildStore_getGuild === void 0 ? void 0 : _GuildStore_getGuild.call(GuildStore, guildId);
+            return {
+                name: (g === null || g === void 0 ? void 0 : g.name) || guildId,
+                icon: (g === null || g === void 0 ? void 0 : g.icon) || null
+            };
+        } catch  {
+            return {
+                name: guildId,
+                icon: null
+            };
+        }
     }
     const S = StyleSheet.create({
         container: {
@@ -549,6 +612,72 @@
         pickImg: {
             width: 28,
             height: 28
+        },
+        // Blacklist picker
+        pickChanRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            paddingVertical: 9,
+            paddingLeft: 20,
+            borderBottomWidth: 1
+        },
+        pickChanName: {
+            flex: 1,
+            fontSize: 14
+        },
+        pickChanCheck: {
+            fontSize: 15,
+            fontWeight: "700",
+            marginLeft: 8
+        },
+        blChipRow: {
+            flexDirection: "row",
+            flexWrap: "wrap",
+            marginTop: 8
+        },
+        blChip: {
+            flexDirection: "row",
+            alignItems: "center",
+            borderRadius: 8,
+            paddingHorizontal: 10,
+            paddingVertical: 6,
+            marginRight: 6,
+            marginBottom: 6
+        },
+        blChipTxt: {
+            fontSize: 12,
+            fontWeight: "600"
+        },
+        blChipX: {
+            fontSize: 13,
+            fontWeight: "700",
+            marginLeft: 5,
+            opacity: 0.6
+        },
+        manageBtn: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "center",
+            borderRadius: 10,
+            paddingVertical: 11,
+            marginTop: 8
+        },
+        manageBtnTxt: {
+            fontSize: 14,
+            fontWeight: "700"
+        },
+        blSectionRow: {
+            flexDirection: "row",
+            alignItems: "center",
+            justifyContent: "space-between",
+            marginTop: 6
+        },
+        blEmpty: {
+            fontSize: 13,
+            opacity: 0.4,
+            fontStyle: "italic",
+            marginTop: 4,
+            marginBottom: 4
         }
     });
     // Resolve a Discord semantic color token to a hex string for the ACTIVE theme.
@@ -834,6 +963,258 @@
             placeholderTextColor: c("TEXT_MUTED", "#87898c")
         }), body);
     }
+    // Server/channel blacklist picker — tap to expand a server, tap channels to
+    // toggle their blacklist status, or tap "Block entire server" to block all messages
+    // from that server.
+    function BlacklistPicker({ onDone }) {
+        const [query, setQuery] = useState("");
+        const [expanded, setExpanded] = useState({});
+        const [tick, setTick] = useState(0);
+        const refresh = ()=>setTick((n)=>n + 1);
+        const guilds = useMemo(()=>{
+            var _GuildStore_getGuilds;
+            const gs = (GuildStore === null || GuildStore === void 0 ? void 0 : (_GuildStore_getGuilds = GuildStore.getGuilds) === null || _GuildStore_getGuilds === void 0 ? void 0 : _GuildStore_getGuilds.call(GuildStore)) || {};
+            return Object.values(gs).sort((a, b)=>a.name < b.name ? -1 : a.name > b.name ? 1 : 0);
+        }, []);
+        const bl = getBlacklist();
+        const q = query.trim().toLowerCase();
+        function toggleServer(guildId) {
+            const idx = bl.servers.indexOf(guildId);
+            if (idx === -1) bl.servers.push(guildId);
+            else bl.servers.splice(idx, 1);
+            refresh();
+        }
+        function toggleChannel(channelId) {
+            const idx = bl.channels.indexOf(channelId);
+            if (idx === -1) bl.channels.push(channelId);
+            else bl.channels.splice(idx, 1);
+            refresh();
+        }
+        function guildIcon(g) {
+            return g.icon ? h(Image, {
+                source: {
+                    uri: `https://cdn.discordapp.com/icons/${g.id}/${g.icon}.${String(g.icon).indexOf("a_") === 0 ? "gif" : "png"}?size=32`
+                },
+                style: S.pickGuildIcon
+            }) : h(View, {
+                style: [
+                    S.pickGuildIcon,
+                    S.avatarFallback,
+                    {
+                        backgroundColor: c("BACKGROUND_TERTIARY", "#1e1f22")
+                    }
+                ]
+            }, h(Text, {
+                style: {
+                    color: c("TEXT_MUTED", "#949ba4"),
+                    fontWeight: "800"
+                }
+            }, (String(g.name).charAt(0) || "?").toUpperCase()));
+        }
+        function chanRow(ch) {
+            const blocked = bl.channels.indexOf(ch.id) !== -1;
+            return h(TouchableOpacity, {
+                key: ch.id,
+                style: [
+                    S.pickChanRow,
+                    {
+                        borderBottomColor: c("BORDER_FAINT", "#ffffff14")
+                    }
+                ],
+                onPress: ()=>toggleChannel(ch.id)
+            }, h(Text, {
+                style: [
+                    S.pickChanName,
+                    {
+                        color: blocked ? c("TEXT_LINK", "#00a8fc") : c("TEXT_NORMAL", "#dbdee1")
+                    }
+                ]
+            }, "# " + ch.name), blocked ? h(Text, {
+                style: [
+                    S.pickChanCheck,
+                    {
+                        color: c("TEXT_LINK", "#00a8fc")
+                    }
+                ]
+            }, "✓") : null);
+        }
+        function expandedSection(g) {
+            const serverBlocked = bl.servers.indexOf(g.id) !== -1;
+            const channels = getGuildTextChannels(g.id);
+            return h(View, null, h(TouchableOpacity, {
+                style: [
+                    S.pickChanRow,
+                    {
+                        borderBottomColor: c("BORDER_FAINT", "#ffffff14"),
+                        backgroundColor: c("BACKGROUND_SECONDARY_ALT", "#232428"),
+                        paddingLeft: 14
+                    }
+                ],
+                onPress: ()=>toggleServer(g.id)
+            }, h(Text, {
+                style: [
+                    S.pickChanName,
+                    {
+                        color: serverBlocked ? c("STATUS_RED_500", "#f23f43") : c("TEXT_NORMAL", "#dbdee1"),
+                        fontWeight: "700",
+                        fontStyle: "italic"
+                    }
+                ]
+            }, serverBlocked ? "Unblock entire server" : "Block entire server"), serverBlocked ? h(Text, {
+                style: [
+                    S.pickChanCheck,
+                    {
+                        color: c("STATUS_RED_500", "#f23f43")
+                    }
+                ]
+            }, "✓") : null), channels.length ? h(View, null, channels.map((ch)=>chanRow(ch))) : h(Text, {
+                style: [
+                    S.noEmoji,
+                    {
+                        color: c("TEXT_MUTED", "#949ba4"),
+                        marginLeft: 20
+                    }
+                ]
+            }, "No text channels found"));
+        }
+        let body;
+        if (q) {
+            const rows = [];
+            guilds.forEach((g)=>{
+                const gMatch = String(g.name).toLowerCase().indexOf(q) >= 0;
+                const channels = getGuildTextChannels(g.id).filter((ch)=>String(ch.name).toLowerCase().indexOf(q) >= 0);
+                if (!gMatch && !channels.length) return;
+                const serverBlocked = bl.servers.indexOf(g.id) !== -1;
+                rows.push(h(View, {
+                    key: g.id
+                }, gMatch ? h(TouchableOpacity, {
+                    style: [
+                        S.pickGuildRow,
+                        {
+                            borderBottomColor: c("BORDER_FAINT", "#ffffff14")
+                        }
+                    ],
+                    onPress: ()=>toggleServer(g.id)
+                }, guildIcon(g), h(Text, {
+                    style: [
+                        S.pickGuildName,
+                        {
+                            color: c("TEXT_NORMAL", "#dbdee1")
+                        }
+                    ],
+                    numberOfLines: 1
+                }, g.name), serverBlocked ? h(Text, {
+                    style: [
+                        S.pickChanCheck,
+                        {
+                            color: c("STATUS_RED_500", "#f23f43")
+                        }
+                    ]
+                }, "blocked") : null) : null, h(View, null, channels.map((ch)=>chanRow(ch)))));
+            });
+            body = rows.length ? rows : h(Text, {
+                style: [
+                    S.noEmoji,
+                    {
+                        color: c("TEXT_MUTED", "#949ba4")
+                    }
+                ]
+            }, "No matches");
+        } else {
+            body = guilds.map((g)=>{
+                const serverBlocked = bl.servers.indexOf(g.id) !== -1;
+                return h(View, {
+                    key: g.id
+                }, h(TouchableOpacity, {
+                    style: [
+                        S.pickGuildRow,
+                        {
+                            borderBottomColor: c("BORDER_FAINT", "#ffffff14")
+                        }
+                    ],
+                    onPress: ()=>setExpanded((x)=>({
+                                ...x,
+                                [g.id]: !x[g.id]
+                            }))
+                }, guildIcon(g), h(Text, {
+                    style: [
+                        S.pickGuildName,
+                        {
+                            color: serverBlocked ? c("STATUS_RED_500", "#f23f43") : c("TEXT_NORMAL", "#dbdee1")
+                        }
+                    ],
+                    numberOfLines: 1
+                }, g.name), serverBlocked ? h(Text, {
+                    style: [
+                        S.pickChanCheck,
+                        {
+                            color: c("STATUS_RED_500", "#f23f43"),
+                            marginRight: 6
+                        }
+                    ]
+                }, "blocked") : null, h(Text, {
+                    style: [
+                        S.pickGuildCount,
+                        {
+                            color: c("TEXT_MUTED", "#949ba4")
+                        }
+                    ]
+                }, expanded[g.id] ? "⌃" : "⌄")), expanded[g.id] ? expandedSection(g) : null);
+            });
+        }
+        return h(ScrollView, {
+            style: [
+                S.container,
+                {
+                    backgroundColor: c("BACKGROUND_PRIMARY", "#313338")
+                }
+            ],
+            contentContainerStyle: S.content
+        }, h(TouchableOpacity, {
+            style: {
+                marginTop: 4,
+                marginBottom: 8
+            },
+            onPress: onDone
+        }, h(Text, {
+            style: [
+                S.backTxt,
+                {
+                    color: c("TEXT_LINK", "#00a8fc")
+                }
+            ]
+        }, "‹  Done")), h(Text, {
+            style: [
+                S.title,
+                {
+                    color: c("HEADER_PRIMARY", "#fff"),
+                    fontSize: 19
+                }
+            ]
+        }, "Server blacklist"), h(Text, {
+            style: [
+                S.subtitle,
+                {
+                    color: c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }, "Tap a server to expand. Block entire servers or individual channels — no reactions will fire there."), h(TextInput, {
+            style: [
+                S.input,
+                {
+                    color: c("TEXT_NORMAL", "#fff"),
+                    backgroundColor: c("INPUT_BACKGROUND", "#1e1f22"),
+                    borderColor: c("BORDER_SUBTLE", "#3f4147"),
+                    marginTop: 12,
+                    marginBottom: 4
+                }
+            ],
+            value: query,
+            onChangeText: setQuery,
+            placeholder: "Search servers or channels",
+            placeholderTextColor: c("TEXT_MUTED", "#87898c")
+        }), body);
+    }
     function UserCard({ userId, onToggle, onDelete, onEdit }) {
         var _cfg_emojis;
         const cfg = getUsers()[userId];
@@ -915,7 +1296,7 @@
                     color: c("TEXT_NORMAL", "#dbdee1")
                 }
             ]
-        }, "\u270E  Edit emojis")), h(TouchableOpacity, {
+        }, "✎  Edit emojis")), h(TouchableOpacity, {
             style: [
                 S.actBtn,
                 {
@@ -945,6 +1326,7 @@
         const [editTarget, setEditTarget] = useState(null);
         const [editInput, setEditInput] = useState("");
         const [picking, setPicking] = useState(null);
+        const [manageBlacklist, setManageBlacklist] = useState(false);
         const inputStyle = [
             S.input,
             {
@@ -995,6 +1377,15 @@
             setEditTarget(null);
             refresh();
         }
+        // ----- Blacklist picker -----
+        if (manageBlacklist) {
+            return h(BlacklistPicker, {
+                onDone: ()=>{
+                    setManageBlacklist(false);
+                    refresh();
+                }
+            });
+        }
         // ----- Server-emoji picker -----
         if (picking) {
             const append = (token)=>{
@@ -1031,7 +1422,7 @@
                         color: c("TEXT_LINK", "#00a8fc")
                     }
                 ]
-            }, "\u2039  Back")), h(Text, {
+            }, "‹  Back")), h(Text, {
                 style: [
                     S.title,
                     {
@@ -1063,7 +1454,7 @@
                 ],
                 value: editInput,
                 onChangeText: setEditInput,
-                placeholder: "\uD83D\uDC4D \uD83D\uDD25 :blobcat:",
+                placeholder: "👍 🔥 :blobcat:",
                 placeholderTextColor: c("TEXT_MUTED", "#87898c"),
                 multiline: true
             }), h(Text, {
@@ -1134,6 +1525,9 @@
             var _getUsers_u;
             return (_getUsers_u = getUsers()[u]) === null || _getUsers_u === void 0 ? void 0 : _getUsers_u.enabled;
         }).length;
+        const bl = getBlacklist();
+        const blServerCount = bl.servers.length;
+        const blChanCount = bl.channels.length;
         return h(ScrollView, {
             style: [
                 S.container,
@@ -1202,7 +1596,28 @@
                     color: c("TEXT_NORMAL", "#dbdee1")
                 }
             ]
-        }, `${activeCount} active`)))), adding ? h(View, {
+        }, `${activeCount} active`)), blServerCount + blChanCount > 0 ? h(View, {
+            style: [
+                S.pill,
+                {
+                    backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31")
+                }
+            ]
+        }, h(View, {
+            style: [
+                S.pillDot,
+                {
+                    backgroundColor: c("STATUS_RED_500", "#f23f43")
+                }
+            ]
+        }), h(Text, {
+            style: [
+                S.pillTxt,
+                {
+                    color: c("TEXT_NORMAL", "#dbdee1")
+                }
+            ]
+        }, `${blServerCount + blChanCount} blocked`)) : null)), adding ? h(View, {
             style: [
                 S.formCard,
                 {
@@ -1249,7 +1664,7 @@
             style: inputStyle,
             value: newEmojis,
             onChangeText: setNewEmojis,
-            placeholder: "\uD83D\uDC4D \uD83D\uDD25 :blobcat:",
+            placeholder: "👍 🔥 :blobcat:",
             placeholderTextColor: c("TEXT_MUTED", "#87898c")
         }), h(TouchableOpacity, {
             style: [
@@ -1267,7 +1682,7 @@
                     color: c("TEXT_LINK", "#00a8fc")
                 }
             ]
-        }, "\uD83D\uDE00  Browse server emojis")), newEmojis.trim() ? h(View, {
+        }, "😀  Browse server emojis")), newEmojis.trim() ? h(View, {
             style: {
                 flexDirection: "row",
                 flexWrap: "wrap",
@@ -1321,7 +1736,7 @@
                     color: c("BRAND_500", "#5865f2")
                 }
             ]
-        }, "\uFF0B  Add a user")), h(Text, {
+        }, "＋  Add a user")), h(Text, {
             style: [
                 S.sectionTitle,
                 {
@@ -1332,7 +1747,7 @@
             style: S.emptyWrap
         }, h(Text, {
             style: S.emptyIcon
-        }, "\uD83D\uDC40"), h(Text, {
+        }, "👀"), h(Text, {
             style: [
                 S.emptyTxt,
                 {
@@ -1355,7 +1770,119 @@
                 },
                 onDelete: handleDelete,
                 onEdit: handleEdit
-            })));
+            })), // ----- Blacklist section -----
+        h(Text, {
+            style: [
+                S.sectionTitle,
+                {
+                    color: c("TEXT_NORMAL", "#fff")
+                }
+            ]
+        }, "Blacklist"), blServerCount + blChanCount === 0 ? h(Text, {
+            style: [
+                S.blEmpty,
+                {
+                    color: c("TEXT_MUTED", "#949ba4")
+                }
+            ]
+        }, "No servers or channels blocked") : h(View, {
+            style: S.blChipRow
+        }, bl.servers.map((gid)=>{
+            const gi = guildInfo(gid);
+            const iconUri = gi.icon ? `https://cdn.discordapp.com/icons/${gid}/${gi.icon}.${String(gi.icon).indexOf("a_") === 0 ? "gif" : "png"}?size=32` : null;
+            return h(TouchableOpacity, {
+                key: "s:" + gid,
+                style: [
+                    S.blChip,
+                    {
+                        backgroundColor: c("STATUS_RED_500", "#f23f43") + "22"
+                    }
+                ],
+                onPress: ()=>{
+                    bl.servers.splice(bl.servers.indexOf(gid), 1);
+                    refresh();
+                }
+            }, iconUri ? h(Image, {
+                source: {
+                    uri: iconUri
+                },
+                style: {
+                    width: 16,
+                    height: 16,
+                    borderRadius: 8,
+                    marginRight: 5
+                }
+            }) : null, h(Text, {
+                style: [
+                    S.blChipTxt,
+                    {
+                        color: c("STATUS_RED_500", "#f23f43")
+                    }
+                ]
+            }, gi.name), h(Text, {
+                style: [
+                    S.blChipX,
+                    {
+                        color: c("STATUS_RED_500", "#f23f43")
+                    }
+                ]
+            }, "×"));
+        }), bl.channels.map((cid)=>{
+            const ci = channelInfo(cid);
+            const iconUri = ci.guildId && ci.guildIcon ? `https://cdn.discordapp.com/icons/${ci.guildId}/${ci.guildIcon}.${String(ci.guildIcon).indexOf("a_") === 0 ? "gif" : "png"}?size=32` : null;
+            return h(TouchableOpacity, {
+                key: "c:" + cid,
+                style: [
+                    S.blChip,
+                    {
+                        backgroundColor: c("TEXT_LINK", "#00a8fc") + "22"
+                    }
+                ],
+                onPress: ()=>{
+                    bl.channels.splice(bl.channels.indexOf(cid), 1);
+                    refresh();
+                }
+            }, iconUri ? h(Image, {
+                source: {
+                    uri: iconUri
+                },
+                style: {
+                    width: 16,
+                    height: 16,
+                    borderRadius: 8,
+                    marginRight: 5
+                }
+            }) : null, h(Text, {
+                style: [
+                    S.blChipTxt,
+                    {
+                        color: c("TEXT_LINK", "#00a8fc")
+                    }
+                ]
+            }, ci.guildName + " • #" + ci.name), h(Text, {
+                style: [
+                    S.blChipX,
+                    {
+                        color: c("TEXT_LINK", "#00a8fc")
+                    }
+                ]
+            }, "×"));
+        })), h(TouchableOpacity, {
+            style: [
+                S.manageBtn,
+                {
+                    backgroundColor: c("BACKGROUND_SECONDARY", "#2b2d31")
+                }
+            ],
+            onPress: ()=>setManageBlacklist(true)
+        }, h(Text, {
+            style: [
+                S.manageBtnTxt,
+                {
+                    color: c("TEXT_LINK", "#00a8fc")
+                }
+            ]
+        }, "🚫  Manage blacklist")));
     }
     var index = {
         onLoad () {
@@ -1364,6 +1891,10 @@
                 if (payload.type !== "MESSAGE_CREATE" || payload.optimistic) return null;
                 const authorId = (_payload_message = payload.message) === null || _payload_message === void 0 ? void 0 : (_payload_message_author = _payload_message.author) === null || _payload_message_author === void 0 ? void 0 : _payload_message_author.id;
                 if (!authorId) return null;
+                // Skip if the server or channel is blacklisted
+                const bl = getBlacklist();
+                if (payload.guildId && bl.servers.indexOf(payload.guildId) !== -1) return null;
+                if (payload.channelId && bl.channels.indexOf(payload.channelId) !== -1) return null;
                 const cfg = getUsers()[authorId];
                 if ((cfg === null || cfg === void 0 ? void 0 : cfg.enabled) && ((_cfg_emojis = cfg.emojis) === null || _cfg_emojis === void 0 ? void 0 : _cfg_emojis.length) > 0) {
                     reactToMessage(payload.channelId, payload.message.id, cfg.emojis);
